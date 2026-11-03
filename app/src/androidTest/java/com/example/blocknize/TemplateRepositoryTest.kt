@@ -7,6 +7,11 @@ import com.blocknize.app.data.AppDatabase
 import com.blocknize.app.data.TemplateRepository
 import com.blocknize.app.data.TemplateTransferCodec
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -40,6 +45,43 @@ class TemplateRepositoryTest {
     }
 
     @After fun tearDown() { database.close() }
+
+    @Test fun weeklyAgendaPreservesPastButUsesCurrentScheduleForTodayAndFuture() = runBlocking {
+        val monday = LocalDate.parse("2026-03-02")
+        repository.createTemplate("Original")
+        val original = database.dao().templateIds().single()
+        repository.saveBlock(original, null, "Primera", "", "", 127, 540, 600)
+        repository.activate(original)
+        testClock.current = Instant.parse("2026-03-03T08:30:00Z")
+        repository.createTemplate("Nueva")
+        val replacement = database.dao().templateIds().first { it != original }
+        repository.saveBlock(replacement, null, "Segunda", "", "", 127, 660, 720)
+        repository.activate(replacement)
+        repository.saveOneOff(null, monday.plusDays(1), "Temporal", "", "", 780, 840)
+        val week = withTimeout(5_000) { repository.observeWeek(monday).first() }
+        assertEquals(7, week.size)
+        assertEquals(listOf("Primera"), week.getValue(monday).map { it.title })
+        assertEquals(listOf("Segunda", "Temporal"), week.getValue(monday.plusDays(1)).map { it.title })
+        assertEquals(listOf("Segunda"), week.getValue(monday.plusDays(2)).map { it.title })
+        assertTrue(week.getValue(monday).all { it.historical })
+        assertTrue(week.getValue(monday.plusDays(1)).none { it.historical })
+    }
+
+    @Test fun weeklyAgendaEmitsAgainAfterAnOccurrenceIsCompleted() = runBlocking {
+        val monday = LocalDate.parse("2026-03-02")
+        repository.saveOneOff(null, monday, "Temporal", "", "", 540, 600)
+        var first = true
+        val emissions = withTimeout(5_000) {
+            repository.observeWeek(monday).onEach { week ->
+                if (first) {
+                    first = false
+                    repository.setCompleted(week.getValue(monday).single(), true)
+                }
+            }.take(2).toList()
+        }
+        assertTrue(!emissions.first().getValue(monday).single().completed)
+        assertTrue(emissions.last().getValue(monday).single().completed)
+    }
 
     @Test fun activationIsSingularAndIdempotentAndActiveEditsCreateHistory() = runBlocking {
         repository.createTemplate("Clases")

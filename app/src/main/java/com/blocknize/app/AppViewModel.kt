@@ -69,6 +69,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun blocks(templateId: String): Flow<List<BlockRow>> = repository.observeBlocks(templateId)
     suspend fun agendaForDate(date: LocalDate): List<AgendaOccurrence> = repository.getAgenda(date)
     suspend fun calendarAgenda(date: LocalDate): List<AgendaOccurrence> = repository.getCalendarAgenda(date)
+    fun observeWeek(startDate: LocalDate): Flow<Map<LocalDate, List<AgendaOccurrence>>> = repository.observeWeek(startDate)
     fun clearMessage() { _message.value = null }
     fun showMessage(text: String) { _message.value = text }
     fun refreshClock() { _now.value = Clock.systemDefaultZone().instant() }

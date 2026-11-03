@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 
 data class AgendaOccurrence(
     val occurrenceKey: String,
@@ -74,6 +75,22 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
 
     suspend fun getCalendarAgenda(date: LocalDate): List<AgendaOccurrence> =
         if (date.isAfter(LocalDate.now(clock))) getAgenda(date) else getHistoricalAgenda(date)
+
+    fun observeWeek(startDate: LocalDate): Flow<Map<LocalDate, List<AgendaOccurrence>>> =
+        database.invalidationTracker.createFlow(
+            "active_template_selection", "routine_templates", "task_definitions", "schedule_blocks",
+            "tags", "template_revisions", "schedule_change_events", "one_off_tasks",
+            "one_off_schedule_events", "completion_records"
+        ).map {
+            database.withTransaction {
+                val today = LocalDate.now(clock)
+                (0L..6L).associate { offset ->
+                    val date = startDate.plusDays(offset)
+                    date to if (date.isBefore(today)) getHistoricalAgenda(date)
+                    else getAgenda(date).filterNot { it.historical }
+                }
+            }
+        }
 
     private suspend fun getHistoricalAgenda(date: LocalDate): List<AgendaOccurrence> {
         val zone = clock.zone

@@ -417,6 +417,19 @@ private sealed interface AgendaLoad {
 
 @Composable
 private fun CalendarScreen(modifier: Modifier, model: AppViewModel) {
+    var weekly by rememberSaveable { mutableStateOf(false) }
+    Column(modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            androidx.compose.material3.FilterChip(selected = !weekly, onClick = { weekly = false }, label = { Text("Mes") })
+            androidx.compose.material3.FilterChip(selected = weekly, onClick = { weekly = true }, label = { Text("Semana") })
+        }
+        if (weekly) WeeklyScheduleScreen(Modifier.weight(1f), model)
+        else MonthlyCalendarScreen(Modifier.weight(1f), model)
+    }
+}
+
+@Composable
+private fun MonthlyCalendarScreen(modifier: Modifier, model: AppViewModel) {
     val now by model.now.collectAsStateWithLifecycle()
     var selectedText by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     var monthText by rememberSaveable { mutableStateOf(YearMonth.now().toString()) }
