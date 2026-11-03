@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">BlockNize</string>
+    <string name="widget_name">Tarea actual · BlockNize</string>
+    <string name="widget_description">Muestra la tarea en curso y su progreso aproximado.</string>
+</resources>
