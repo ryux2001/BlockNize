@@ -12,6 +12,60 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class AppDatabaseMigrationTest {
+    @Test fun everyPreviousVersionMigratesToFiveWithoutLosingExistingRows() {
+        for (version in 1..4) {
+            val name = "backup-migration-$version"
+            helper.createDatabase(name, version).apply {
+                execSQL("INSERT INTO routine_templates(id,name,createdAt,updatedAt) VALUES('preserved','Original',1,1)")
+                if (version == 4) {
+                    execSQL("INSERT INTO occurrence_exceptions(id,templateId,blockId,originalEpochDay,targetEpochDay,action,payloadJson,zoneId,createdAt,modifiedAt) VALUES('exception','preserved','deleted-block',20000,20001,'SKIP','{}','UTC',10,10)")
+                    execSQL("INSERT INTO completion_records(occurrenceKey,sourceType,sourceId,dateEpochDay,completedAt,titleSnapshot,startMinuteSnapshot,endMinuteSnapshot,sourceTemplateId,sourceRevisionId,sourceEventId) VALUES('historical','WEEKLY','deleted-block',20000,20,'Original',540,600,'preserved',NULL,NULL)")
+                }
+                close()
+            }
+            helper.runMigrationsAndValidate(name, 5, true, AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4, AppDatabase.MIGRATION_4_5).apply {
+                query("SELECT name FROM routine_templates WHERE id='preserved'").use {
+                    assertEquals(true, it.moveToFirst()); assertEquals("Original", it.getString(0))
+                }
+                query("SELECT COUNT(*) FROM pending_restore_preferences").use {
+                    assertEquals(true, it.moveToFirst()); assertEquals(0, it.getInt(0))
+                }
+                if (version == 4) {
+                    query("SELECT occurrenceKey FROM completion_records").use {
+                        assertEquals(true, it.moveToFirst()); assertEquals("historical", it.getString(0))
+                    }
+                    query("SELECT blockId FROM occurrence_exceptions").use {
+                        assertEquals(true, it.moveToFirst()); assertEquals("deleted-block", it.getString(0))
+                    }
+                }
+                close()
+            }
+        }
+    }
+    @Test fun migrationsFromEveryPreviousVersionPreserveDataAndValidateVersionFour() {
+        for (version in 1..3) {
+            val name = "exceptions-migration-$version"
+            helper.createDatabase(name, version).apply {
+                execSQL("INSERT INTO routine_templates(id,name,createdAt,updatedAt) VALUES('preserved','Original',1,1)")
+                close()
+            }
+            helper.runMigrationsAndValidate(name, 4, true,
+                AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4).apply {
+                query("SELECT name FROM routine_templates WHERE id='preserved'").use {
+                    assertEquals(true, it.moveToFirst())
+                    assertEquals("Original", it.getString(0))
+                }
+                query("SELECT COUNT(*) FROM occurrence_exceptions").use {
+                    assertEquals(true, it.moveToFirst()); assertEquals(0, it.getInt(0))
+                }
+                query("SELECT COUNT(*) FROM occurrence_exception_events").use {
+                    assertEquals(true, it.moveToFirst()); assertEquals(0, it.getInt(0))
+                }
+                close()
+            }
+        }
+    }
     @get:Rule
     val helper = MigrationTestHelper(
         InstrumentationRegistry.getInstrumentation(), AppDatabase::class.java,

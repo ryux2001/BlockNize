@@ -7,6 +7,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WeeklyScheduleLayoutTest {
+    @Test fun backwardClockTransitionKeepsBothRealHistoricalSegmentsVisible() {
+        val day = LocalDate.parse("2026-10-25")
+        val start = java.time.Instant.parse("2026-10-25T00:45:00Z")
+        val end = java.time.Instant.parse("2026-10-25T01:15:00Z")
+        val occurrence = AgendaOccurrence("overlap", "WEEKLY", "id", day, "Repeated hour", "", null,
+            165, 135, start, end, null, null, null, false, historical = true)
+        val result = schedulePlacements(day, listOf(occurrence), java.time.ZoneId.of("Europe/Madrid"))
+        assertEquals(2, result.size)
+        assertEquals(listOf(120f, 165f), result.map { it.startMinute })
+        assertEquals(listOf(135f, 180f), result.map { it.endMinute })
+        assertEquals(30, scheduledMinutes(result))
+    }
+
+    @Test fun forwardClockTransitionDoesNotInventOccupiedTimeInMissingHour() {
+        val day = LocalDate.parse("2026-03-29")
+        val start = java.time.Instant.parse("2026-03-29T00:30:00Z")
+        val end = java.time.Instant.parse("2026-03-29T01:30:00Z")
+        val occurrence = AgendaOccurrence("gap", "WEEKLY", "id", day, "Gap", "", null,
+            90, 210, start, end, null, null, null, false)
+        val result = schedulePlacements(day, listOf(occurrence), java.time.ZoneId.of("Europe/Madrid"))
+        assertEquals(listOf(90f, 180f), result.map { it.startMinute })
+        assertEquals(listOf(120f, 210f), result.map { it.endMinute })
+        assertEquals(60, scheduledMinutes(result))
+    }
     private val date = LocalDate.parse("2026-11-03")
     private fun task(id: String, start: Int, end: Int): AgendaOccurrence {
         val midnight = date.atStartOfDay().toInstant(ZoneOffset.UTC)

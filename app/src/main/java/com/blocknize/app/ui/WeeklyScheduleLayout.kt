@@ -4,6 +4,8 @@ import com.blocknize.app.data.AgendaOccurrence
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.Duration
 import java.time.temporal.TemporalAdjusters
 
 internal fun weekStart(date: LocalDate): LocalDate = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
@@ -24,13 +26,24 @@ internal fun schedulePlacements(
 ): List<SchedulePlacement> {
     val dayStart = date.atStartOfDay(zone).toInstant()
     val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant()
-    val intervals = occurrences.mapNotNull { occurrence ->
+    val intervals = occurrences.flatMap { occurrence ->
         val start = maxOf(dayStart, occurrence.start)
         val end = minOf(dayEnd, occurrence.end)
-        if (start >= end) return@mapNotNull null
-        val from = if (start == dayStart) 0f else start.atZone(zone).toLocalTime().toSecondOfDay() / 60f
-        val to = if (end == dayEnd) 1440f else end.atZone(zone).toLocalTime().toSecondOfDay() / 60f
-        if (to <= from) null else SchedulePlacement(occurrence, from, to, 0, 1)
+        if (start >= end) return@flatMap emptyList()
+        // Split at offset transitions: a repeated hour must not make a real interval disappear.
+        val midnight = date.atStartOfDay().toInstant(ZoneOffset.UTC)
+        buildList {
+            var cursor = start
+            while (cursor < end) {
+                val transition = zone.rules.nextTransition(cursor)
+                val until = minOf(end, transition?.instant ?: end)
+                val offset = zone.rules.getOffset(cursor).totalSeconds.toLong()
+                val from = (Duration.between(midnight, cursor).seconds + offset) / 60f
+                val to = (Duration.between(midnight, until).seconds + offset) / 60f
+                if (to > from) add(SchedulePlacement(occurrence, from.coerceIn(0f, 1440f), to.coerceIn(0f, 1440f), 0, 1))
+                cursor = until
+            }
+        }
     }.sortedWith(compareBy<SchedulePlacement> { it.startMinute }.thenBy { it.endMinute }.thenBy { it.occurrence.occurrenceKey })
     val result = mutableListOf<SchedulePlacement>()
     val group = mutableListOf<SchedulePlacement>()
@@ -57,7 +70,7 @@ internal fun schedulePlacements(
 internal fun scheduledMinutes(placements: List<SchedulePlacement>): Int {
     var end = 0f
     var total = 0f
-    for (placement in placements.sortedBy { it.startMinute }) {
+    for (placement in placements.filter { it.occurrence.exceptionStatus == null }.sortedBy { it.startMinute }) {
         total += (placement.endMinute - maxOf(end, placement.startMinute)).coerceAtLeast(0f)
         end = maxOf(end, placement.endMinute)
     }

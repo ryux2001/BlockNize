@@ -1,6 +1,7 @@
 package com.blocknize.app.ui
 
 import android.content.Context
+import android.content.res.Configuration
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.graphics.Color as AndroidColor
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -29,18 +31,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.EventNote
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DeleteOutline
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ColorLens
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -95,6 +93,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.blocknize.app.AppViewModel
 import com.blocknize.app.data.BlockRow
@@ -104,6 +104,10 @@ import com.blocknize.app.data.TemplateTransferCodec
 import com.blocknize.app.data.TransferTemplate
 import com.blocknize.app.data.parseAccentHex
 import com.blocknize.app.data.widgetBackgroundArgb
+import com.blocknize.app.domain.currentTasks
+import com.blocknize.app.ui.focus.FocusRoute
+import com.blocknize.app.ui.occurrence.OccurrenceActions
+import com.blocknize.app.ui.occurrence.exceptionLabel
 import kotlin.math.roundToInt
 import java.time.LocalDate
 import java.time.YearMonth
@@ -113,11 +117,6 @@ import java.util.Locale
 
 private val weekdayNames = listOf("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
 private val weekdayShort = listOf("L", "M", "X", "J", "V", "S", "D")
-private data class Tab(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
-private val tabs = listOf(
-    Tab("Inicio", Icons.Filled.Home), Tab("Calendario", Icons.Filled.CalendarMonth),
-    Tab("Registro", Icons.Filled.CheckCircle), Tab("Bloques", Icons.AutoMirrored.Filled.EventNote)
-)
 private data class Preset(val name: String, val hex: String) { val argb get() = parseAccentHex(hex)!! }
 private val presets = listOf(
     Preset("Violeta", "A78BFA"), Preset("Celeste", "38BDF8"), Preset("Turquesa", "2DD4BF"),
@@ -134,7 +133,9 @@ fun BlockNizeApp(modifier: Modifier = Modifier, model: AppViewModel) {
     val todayAgenda by model.todayAgenda.collectAsStateWithLifecycle()
     val message by model.message.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
-    var selectedTab by rememberSaveable { mutableStateOf(0) }
+    var destinationName by rememberSaveable { mutableStateOf(AppDestination.TODAY.name) }
+    val destination = AppDestination.entries.firstOrNull { it.name == destinationName } ?: AppDestination.TODAY
+    val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     var settings by rememberSaveable { mutableStateOf(false) }
     var picker by remember { mutableStateOf(false) }
     var editingTemplate by rememberSaveable { mutableStateOf<String?>(null) }
@@ -164,85 +165,97 @@ fun BlockNizeApp(modifier: Modifier = Modifier, model: AppViewModel) {
             model.showMessage(error.message ?: "El archivo no se pudo importar.")
         }
     }
-    var showOneOff by remember { mutableStateOf(false) }
+    var showOneOff by rememberSaveable { mutableStateOf(false) }
     var editOneOff by remember { mutableStateOf<AgendaOccurrence?>(null) }
     var deleteOneOff by remember { mutableStateOf<AgendaOccurrence?>(null) }
     LaunchedEffect(message) { message?.let { snackbar.showSnackbar(it); model.clearMessage() } }
     BackHandler(enabled = settings || editingTemplate != null) {
         if (settings) settings = false else editingTemplate = null
     }
-    Scaffold(
-        modifier = modifier,
-        containerColor = Color.Black,
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(containerColor = Color.Black),
-                title = {
-                    Text(when {
-                        settings -> "Apariencia"
-                        editingTemplate != null -> templates.firstOrNull { it.id == editingTemplate }?.name ?: "Editar semana"
-                        selectedTab == 3 -> "Semanas y bloques"
-                        selectedTab == 1 -> "Calendario"
-                        selectedTab == 2 -> "Registro"
-                        else -> "BlockNize"
-                    }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                },
-                navigationIcon = {
-                    if (editingTemplate != null) IconButton(onClick = { editingTemplate = null }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver a las semanas")
+    Row(modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            containerColor = Color.Black,
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = {
+                if (destination != AppDestination.FOCUS || settings || editingTemplate != null) TopAppBar(
+                    modifier = Modifier.testTag("app-top-bar"),
+                    colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(containerColor = Color.Black),
+                    title = {
+                        Text(when {
+                            settings -> "Apariencia"
+                            editingTemplate != null -> templates.firstOrNull { it.id == editingTemplate }?.name ?: "Editar semana"
+                            destination == AppDestination.BLOCKS -> "Semanas y bloques"
+                            destination == AppDestination.CALENDAR -> "Calendario"
+                            destination == AppDestination.HISTORY -> "Registro"
+                            destination == AppDestination.FOCUS -> "Concentración"
+                            else -> "BlockNize"
+                        }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    },
+                    navigationIcon = {
+                        if (editingTemplate != null) IconButton(onClick = { editingTemplate = null }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Volver a las semanas")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { settings = !settings; editingTemplate = null }) {
+                            Icon(if (settings) Icons.Filled.ColorLens else Icons.Filled.Settings, contentDescription = if (settings) "Cerrar apariencia" else "Configuración")
+                        }
                     }
-                },
-                actions = {
-                    IconButton(onClick = { settings = !settings; editingTemplate = null }) {
-                        Icon(if (settings) Icons.Filled.ColorLens else Icons.Filled.Settings, contentDescription = if (settings) "Cerrar apariencia" else "Configuración")
-                    }
-                }
-            )
-        },
-        floatingActionButton = {
-            if (!settings && editingTemplate == null && selectedTab == 0) {
-                ExtendedFloatingActionButton(
-                    onClick = { showOneOff = true },
-                    icon = { Icon(Icons.Filled.Add, contentDescription = null) },
-                    text = { Text("Añadir temporal") },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
-            }
-        },
-        bottomBar = {
-            if (!settings && editingTemplate == null) NavigationBar(containerColor = Color.Black) {
-                tabs.forEachIndexed { index, tab ->
-                    NavigationBarItem(selected = selectedTab == index, onClick = { selectedTab = index },
-                        icon = { Icon(tab.icon, contentDescription = tab.title) }, label = { Text(tab.title) })
+            },
+            floatingActionButton = {
+                if (!settings && editingTemplate == null && destination == AppDestination.TODAY) {
+                    ExtendedFloatingActionButton(
+                        onClick = { showOneOff = true },
+                        icon = { Icon(Icons.Filled.Add, contentDescription = null) },
+                        text = { Text("Añadir temporal") },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    )
                 }
+            },
+            bottomBar = {
+                if (!landscape && !settings && editingTemplate == null) NavigationBar(
+                    modifier = Modifier.testTag("navigation-bottom"), containerColor = Color.Black) {
+                    AppDestination.entries.forEach { tab ->
+                        NavigationBarItem(modifier = Modifier.testTag("destination-${tab.name}"),
+                            selected = destination == tab, onClick = { destinationName = tab.name },
+                            icon = { Icon(tab.icon, contentDescription = tab.title) }, label = { Text(tab.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            alwaysShowLabel = destination == tab)
+                    }
+                }
+            }
+        ) { insets ->
+            when {
+                settings -> AppearanceScreen(Modifier.padding(insets), accent, model) { picker = true }
+                editingTemplate != null -> WeeklyEditor(
+                    Modifier.padding(insets), model, editingTemplate!!,
+                    isActive = active?.templateId == editingTemplate,
+                    onActivate = { templates.firstOrNull { it.id == editingTemplate }?.let { activateTemplate = it } }
+                )
+                destination == AppDestination.TODAY -> TodayScreen(
+                    Modifier.padding(insets), templates.firstOrNull { it.id == active?.templateId }?.name,
+                    model, onEditOneOff = { editOneOff = it },
+                    onDeleteOneOff = { deleteOneOff = it }
+                )
+                destination == AppDestination.BLOCKS -> TemplateManager(
+                    Modifier.padding(insets), templates, active?.templateId,
+                    onCreate = { createTemplate = true }, onEdit = { editingTemplate = it },
+                    onRename = { renameTemplate = it }, onActivate = { activateTemplate = it },
+                    onExport = { template -> model.exportTemplate(template.id) { json ->
+                        if (json != null) { pendingExport = json; exportLauncher.launch("${safeFileName(template.name)}.json") }
+                    } }, onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) }
+                )
+                destination == AppDestination.CALENDAR -> CalendarScreen(Modifier.padding(insets), model)
+                destination == AppDestination.HISTORY -> HistoryScreen(Modifier.padding(insets), model)
+                destination == AppDestination.FOCUS -> FocusRoute(Modifier.padding(insets), model,
+                    onOpenSettings = if (landscape) null else ({ settings = true }))
             }
         }
-    ) { insets ->
-        when {
-            settings -> AppearanceScreen(Modifier.padding(insets), accent, model) { picker = true }
-            editingTemplate != null -> WeeklyEditor(
-                Modifier.padding(insets), model, editingTemplate!!,
-                isActive = active?.templateId == editingTemplate,
-                onActivate = { templates.firstOrNull { it.id == editingTemplate }?.let { activateTemplate = it } }
-            )
-            selectedTab == 0 -> TodayScreen(
-                Modifier.padding(insets), templates.firstOrNull { it.id == active?.templateId }?.name,
-                model, onEditOneOff = { editOneOff = it },
-                onDeleteOneOff = { deleteOneOff = it }
-            )
-            selectedTab == 3 -> TemplateManager(
-                Modifier.padding(insets), templates, active?.templateId,
-                onCreate = { createTemplate = true }, onEdit = { editingTemplate = it },
-                onRename = { renameTemplate = it }, onActivate = { activateTemplate = it },
-                onExport = { template -> model.exportTemplate(template.id) { json ->
-                    if (json != null) { pendingExport = json; exportLauncher.launch("${safeFileName(template.name)}.json") }
-                } }, onImport = { importLauncher.launch(arrayOf("application/json", "text/*")) }
-            )
-            selectedTab == 1 -> CalendarScreen(Modifier.padding(insets), model)
-            selectedTab == 2 -> HistoryScreen(Modifier.padding(insets), model)
-            else -> EmptySection(Modifier.padding(insets), tabs[selectedTab].title, accent)
+        if (landscape && !settings && editingTemplate == null) {
+            AppNavigationRail(destination, onSelect = { destinationName = it.name },
+                onOpenSettings = if (destination == AppDestination.FOCUS) ({ settings = true }) else null)
         }
     }
     if (picker) AccentPickerDialog(accent, { picker = false }) { model.setAccent(it); picker = false }
@@ -346,6 +359,7 @@ private fun TodayScreen(
     val now by model.now.collectAsStateWithLifecycle()
     val busy by model.isBusy.collectAsStateWithLifecycle()
     val date = now.atZone(ZoneId.systemDefault()).toLocalDate()
+    val currentKeys = currentTasks(agenda, now).map { it.occurrenceKey }.toSet()
     val spanishLocale = remember { Locale.forLanguageTag("es-ES") }
     val headerDate = remember(date, spanishLocale) { DateTimeFormatter.ofPattern("EEEE, d MMMM", spanishLocale).format(date).replaceFirstChar { it.uppercase(spanishLocale) } }
     Column(modifier.fillMaxSize().padding(horizontal = 18.dp)) {
@@ -365,9 +379,10 @@ private fun TodayScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 96.dp)) {
                 items(agenda, key = { it.occurrenceKey }) { item ->
-                    val current = !item.completed && now >= item.start && now < item.end
+                    val current = item.occurrenceKey in currentKeys
                     val progress = item.progressAt(now)
                     val stateLabel = when {
+                        item.exceptionStatus != null -> exceptionLabel(item).orEmpty()
                         item.completed -> "Completada"
                         current -> "En curso · ${(progress * 100).toInt()}%"
                         now < item.start -> "Próxima"
@@ -376,7 +391,7 @@ private fun TodayScreen(
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                         shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
                         Row(Modifier.padding(start = 10.dp, top = 12.dp, end = 10.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = item.completed, onCheckedChange = { model.setCompleted(item, it) }, enabled = !busy,
+                            Checkbox(checked = item.completed, onCheckedChange = { model.setCompleted(item, it) }, enabled = !busy && item.exceptionStatus == null,
                                 modifier = Modifier.semantics { contentDescription = "Finalización de ${item.title}" })
                             Column(Modifier.width(66.dp)) {
                                 Text(formatMinute(item.startMinute), fontWeight = FontWeight.SemiBold, color = if (current) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
@@ -389,6 +404,7 @@ private fun TodayScreen(
                                 }
                                 if (item.description.isNotBlank()) Text(item.description, color = Color(0xFFB8B8B8), style = MaterialTheme.typography.bodySmall)
                                 item.tagName?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+                                if (item.exceptionId != null && item.exceptionStatus == null) Text(exceptionLabel(item).orEmpty(), style = MaterialTheme.typography.labelSmall)
                                 Text(if (item.historical) "Actividad anterior · completada" else stateLabel,
                                     color = if (item.completed || current) MaterialTheme.colorScheme.primary else Color(0xFFB8B8B8),
                                     style = MaterialTheme.typography.labelSmall)
@@ -400,6 +416,7 @@ private fun TodayScreen(
                                     TextButton(onClick = { onEditOneOff(item) }, enabled = !busy) { Text("Editar") }
                                     TextButton(onClick = { onDeleteOneOff(item) }, enabled = !busy) { Text("Eliminar") }
                                 }
+                                OccurrenceActions(item, model)
                             }
                         }
                     }
@@ -436,9 +453,11 @@ private fun MonthlyCalendarScreen(modifier: Modifier, model: AppViewModel) {
     var retry by remember { mutableStateOf(0) }
     val selectedDate = remember(selectedText) { runCatching { LocalDate.parse(selectedText) }.getOrDefault(LocalDate.now()) }
     val month = remember(monthText) { runCatching { YearMonth.parse(monthText) }.getOrDefault(YearMonth.from(selectedDate)) }
-    val load by produceState<AgendaLoad>(AgendaLoad.Loading, selectedDate, retry) {
-        value = try { AgendaLoad.Loaded(model.calendarAgenda(selectedDate)) }
-        catch (error: Exception) { AgendaLoad.Failed(error.message ?: "No se pudo cargar la fecha.") }
+    val load by produceState<AgendaLoad>(AgendaLoad.Loading, selectedDate, retry, now.atZone(ZoneId.systemDefault()).toLocalDate()) {
+        value = AgendaLoad.Loading
+        try { model.observeCalendarAgenda(selectedDate).collect { value = AgendaLoad.Loaded(it) } }
+        catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+        catch (error: Exception) { value = AgendaLoad.Failed(error.message ?: "No se pudo cargar la fecha.") }
     }
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { MonthDateGrid(month, selectedDate, now.atZone(ZoneId.systemDefault()).toLocalDate(),
@@ -473,7 +492,7 @@ private fun MonthlyCalendarScreen(modifier: Modifier, model: AppViewModel) {
                 item { Text("$completed completadas · $interrupted interrumpidas · ${items.size} actividades",
                     color = Color(0xFFB8B8B8), style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(bottom = 4.dp)) }
                 if (items.isEmpty()) item { Text("No hay actividades en esta fecha.", color = Color(0xFFB8B8B8), modifier = Modifier.padding(12.dp)) }
-                else items(items, key = { it.occurrenceKey }) { item -> CalendarOccurrenceCard(item, now) }
+                else items(items, key = { it.occurrenceKey }) { item -> CalendarOccurrenceCard(item, now, model) }
             }
         }
     }
@@ -489,9 +508,11 @@ private fun HistoryScreen(modifier: Modifier, model: AppViewModel) {
     val selectedDate = remember(selectedText) { runCatching { LocalDate.parse(selectedText) }.getOrDefault(LocalDate.now()) }
     val month = remember(monthText) { runCatching { YearMonth.parse(monthText) }.getOrDefault(YearMonth.from(selectedDate)) }
     val today = now.atZone(ZoneId.systemDefault()).toLocalDate()
-    val load by produceState<AgendaLoad>(AgendaLoad.Loading, selectedDate, retry) {
-        value = try { AgendaLoad.Loaded(model.calendarAgenda(selectedDate)) }
-        catch (error: Exception) { AgendaLoad.Failed(error.message ?: "No se pudo cargar el registro.") }
+    val load by produceState<AgendaLoad>(AgendaLoad.Loading, selectedDate, retry, today) {
+        value = AgendaLoad.Loading
+        try { model.observeHistory(selectedDate).collect { value = AgendaLoad.Loaded(it) } }
+        catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+        catch (error: Exception) { value = AgendaLoad.Failed(error.message ?: "No se pudo cargar el registro.") }
     }
     LazyColumn(modifier.fillMaxSize().padding(horizontal = 16.dp), contentPadding = PaddingValues(bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { MonthDateGrid(month, selectedDate, today, onMonthChange = { monthText = it.toString() }, onSelectDate = {
@@ -509,9 +530,13 @@ private fun HistoryScreen(modifier: Modifier, model: AppViewModel) {
                 if (selectedDate.isAfter(today)) item { Text("El registro aún no está disponible para fechas futuras.", color = Color(0xFFB8B8B8)) }
                 else {
                     val completed = result.occurrences.filter { it.completed }
-                    val interrupted = result.occurrences.filter { !it.completed && it.interrupted }
-                    val pending = result.occurrences.filter { !it.completed && !it.interrupted && it.end <= now }
-                    val ongoing = result.occurrences.filter { !it.completed && !it.interrupted && it.start <= now && now < it.end }
+                    val exceptions = result.occurrences.filter { it.exceptionStatus != null }
+                    val actionable = result.occurrences.filter { it.exceptionStatus == null }
+                    val interrupted = actionable.filter { !it.completed && it.interrupted }
+                    val pending = actionable.filter { !it.completed && !it.interrupted && it.end <= now }
+                    val ongoing = actionable.filter { !it.completed && !it.interrupted && it.start <= now && now < it.end }
+                    if (exceptions.isNotEmpty()) item { HistoryGroupTitle("Omitidas y reprogramadas", exceptions.size, Color(0xFFFFC857)) }
+                    items(exceptions, key = { "exception:${it.occurrenceKey}" }) { HistoryOccurrenceCard(it, exceptionLabel(it).orEmpty(), enabled = false) }
                     if (completed.isNotEmpty()) item { HistoryGroupTitle("Completadas", completed.size, MaterialTheme.colorScheme.primary) }
                     items(completed, key = { "done:${it.occurrenceKey}" }) { item ->
                         HistoryOccurrenceCard(item, "Completada", onUndo = { model.setCompleted(item, false) }, enabled = !busy)
@@ -522,7 +547,7 @@ private fun HistoryScreen(modifier: Modifier, model: AppViewModel) {
                     items(pending, key = { "pending:${it.occurrenceKey}" }) { HistoryOccurrenceCard(it, "Pendiente", enabled = false) }
                     if (ongoing.isNotEmpty()) item { HistoryGroupTitle("En curso", ongoing.size, MaterialTheme.colorScheme.primary) }
                     items(ongoing, key = { "ongoing:${it.occurrenceKey}" }) { HistoryOccurrenceCard(it, "En curso", enabled = false) }
-                    if (completed.isEmpty() && interrupted.isEmpty() && pending.isEmpty() && ongoing.isEmpty()) item {
+                    if (exceptions.isEmpty() && completed.isEmpty() && interrupted.isEmpty() && pending.isEmpty() && ongoing.isEmpty()) item {
                         Text("No hay actividad registrada para esta fecha.", color = Color(0xFFB8B8B8), modifier = Modifier.padding(vertical = 12.dp))
                     }
                 }
@@ -576,8 +601,9 @@ internal fun MonthDateGrid(
 }
 
 @Composable
-internal fun CalendarOccurrenceCard(item: AgendaOccurrence, now: java.time.Instant) {
+internal fun CalendarOccurrenceCard(item: AgendaOccurrence, now: java.time.Instant, model: AppViewModel? = null) {
     val status = when {
+        item.exceptionStatus != null -> exceptionLabel(item).orEmpty()
         item.completed -> "Completada"
         item.interrupted -> "Interrumpida por cambio"
         now < item.start -> "Próxima"
@@ -592,6 +618,8 @@ internal fun CalendarOccurrenceCard(item: AgendaOccurrence, now: java.time.Insta
             item.tagName?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
             Text("$status${if (item.sourceType == "ONE_OFF") " · Temporal" else ""}", color = Color(0xFFB8B8B8), style = MaterialTheme.typography.labelSmall)
             item.sourceTemplateName?.let { Text("Semana · $it", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall) }
+            if (item.exceptionId != null && item.exceptionStatus == null) Text(exceptionLabel(item).orEmpty(), style = MaterialTheme.typography.labelSmall)
+            if (model != null) OccurrenceActions(item, model)
         }
     }
 }
@@ -647,25 +675,25 @@ private fun OneOffDialog(
 ) {
     val now by model.now.collectAsStateWithLifecycle()
     val busy by model.isBusy.collectAsStateWithLifecycle()
-    var title by remember(initial?.occurrenceKey) { mutableStateOf(initial?.title.orEmpty()) }
-    var description by remember(initial?.occurrenceKey) { mutableStateOf(initial?.description.orEmpty()) }
-    var tag by remember(initial?.occurrenceKey) { mutableStateOf(initial?.tagName.orEmpty()) }
-    var dateText by remember(initial?.occurrenceKey) {
+    var title by rememberSaveable(initial?.occurrenceKey) { mutableStateOf(initial?.title.orEmpty()) }
+    var description by rememberSaveable(initial?.occurrenceKey) { mutableStateOf(initial?.description.orEmpty()) }
+    var tag by rememberSaveable(initial?.occurrenceKey) { mutableStateOf(initial?.tagName.orEmpty()) }
+    var dateText by rememberSaveable(initial?.occurrenceKey) {
         mutableStateOf((initial?.date ?: now.atZone(ZoneId.systemDefault()).toLocalDate()).toString())
     }
-    var start by remember(initial?.occurrenceKey) { mutableStateOf(initial?.startMinute?.let(::formatMinute) ?: "09:00") }
-    var end by remember(initial?.occurrenceKey) { mutableStateOf(initial?.endMinute?.let(::formatMinute) ?: "10:00") }
+    var start by rememberSaveable(initial?.occurrenceKey) { mutableStateOf(initial?.startMinute?.let(::formatMinute) ?: "09:00") }
+    var end by rememberSaveable(initial?.occurrenceKey) { mutableStateOf(initial?.endMinute?.let(::formatMinute) ?: "10:00") }
     var overlapAcknowledged by remember(initial?.occurrenceKey) { mutableStateOf(false) }
     val date = runCatching { LocalDate.parse(dateText.trim()) }.getOrNull()
     val agendaForDate by produceState(initialValue = agenda, date, agenda) {
         if (date != null) value = runCatching { model.agendaForDate(date) }.getOrDefault(emptyList())
         else value = emptyList()
     }
-    val startMinute = parseMinute(start); val endMinute = parseMinute(end)
+    val startMinute = parseMinute(start); val endMinute = parseMinute(end, allowEndOfDay = true)
     val today = now.atZone(ZoneId.systemDefault()).toLocalDate()
     val valid = date != null && !date.isBefore(today) && title.isNotBlank() && startMinute != null && endMinute != null && startMinute < endMinute
     val hasOverlap = valid && agendaForDate.any { other ->
-        !other.historical && other.sourceId != initial?.sourceId && other.startMinute < endMinute!! && other.endMinute > startMinute!!
+        !other.historical && other.exceptionStatus == null && other.sourceId != initial?.sourceId && other.startMinute < endMinute!! && other.endMinute > startMinute!!
     }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(if (initial == null) "Tarea temporal" else "Editar tarea temporal") }, text = {
         LazyColumn(modifier = Modifier.heightIn(max = 420.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -675,7 +703,7 @@ private fun OneOffDialog(
             item { OutlinedTextField(dateText, { dateText = it; overlapAcknowledged = false }, label = { Text("Fecha · AAAA-MM-DD") }, singleLine = true, isError = date == null, modifier = Modifier.fillMaxWidth()) }
             item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 AlarmTimeField("Inicio", parseMinute(start) ?: 540, Modifier.weight(1f)) { start = formatMinute(it); overlapAcknowledged = false }
-                AlarmTimeField("Fin", parseMinute(end) ?: 600, Modifier.weight(1f)) { end = formatMinute(it); overlapAcknowledged = false }
+                AlarmTimeField("Fin", parseMinute(end, allowEndOfDay = true) ?: 600, Modifier.weight(1f)) { end = formatMinute(it); overlapAcknowledged = false }
             } }
             item {
                 if (date == null) Text("Escribe una fecha válida, por ejemplo 2026-10-29.", color = MaterialTheme.colorScheme.error)
@@ -791,9 +819,9 @@ internal fun WeekdaySelector(mask: Int, onSelect: (Int) -> Unit, modifier: Modif
 @Composable
 private fun WeeklyEditor(modifier: Modifier, model: AppViewModel, templateId: String, isActive: Boolean, onActivate: () -> Unit) {
     val blocks by model.blocks(templateId).collectAsStateWithLifecycle(initialValue = emptyList())
-    var selectedDay by remember(templateId) { mutableStateOf(0) }
+    var selectedDay by rememberSaveable(templateId) { mutableStateOf(0) }
     var editBlock by remember { mutableStateOf<BlockRow?>(null) }
-    var addBlock by remember { mutableStateOf(false) }
+    var addBlock by rememberSaveable(templateId) { mutableStateOf(false) }
     var deleteBlock by remember { mutableStateOf<BlockRow?>(null) }
     val busy by model.isBusy.collectAsStateWithLifecycle()
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
@@ -862,7 +890,14 @@ private fun AlarmTimeField(label: String, minuteOfDay: Int, modifier: Modifier =
         AlertDialog(
             onDismissRequest = { open = false },
             title = { Text(if (label == "Inicio") "Elige la hora de inicio" else "Elige la hora de fin") },
-            text = { TimePicker(state = state) },
+            text = {
+                Column {
+                    TimePicker(state = state)
+                    if (label == "Fin") TextButton(onClick = { onTimeSelected(1440); open = false }) {
+                        Text("Fin del día · 24:00")
+                    }
+                }
+            },
             confirmButton = { Button(onClick = {
                 onTimeSelected(state.hour * 60 + state.minute)
                 open = false
@@ -877,15 +912,15 @@ private fun BlockDialog(
     block: BlockRow?, selectedDay: Int, existing: List<BlockRow>, saving: Boolean, onDismiss: () -> Unit,
     onSave: (String, String, String, Int, Int, Int) -> Unit
 ) {
-    var title by remember(block?.blockId) { mutableStateOf(block?.title.orEmpty()) }
-    var description by remember(block?.blockId) { mutableStateOf(block?.description.orEmpty()) }
-    var tag by remember(block?.blockId) { mutableStateOf(block?.tagName.orEmpty()) }
-    var mask by remember(block?.blockId) { mutableStateOf(block?.daysMask ?: (1 shl selectedDay)) }
-    var start by remember(block?.blockId) { mutableStateOf(block?.startMinute?.let(::formatMinute) ?: "09:00") }
-    var end by remember(block?.blockId) { mutableStateOf(block?.endMinute?.let(::formatMinute) ?: "10:00") }
+    var title by rememberSaveable(block?.blockId) { mutableStateOf(block?.title.orEmpty()) }
+    var description by rememberSaveable(block?.blockId) { mutableStateOf(block?.description.orEmpty()) }
+    var tag by rememberSaveable(block?.blockId) { mutableStateOf(block?.tagName.orEmpty()) }
+    var mask by rememberSaveable(block?.blockId) { mutableStateOf(block?.daysMask ?: (1 shl selectedDay)) }
+    var start by rememberSaveable(block?.blockId) { mutableStateOf(block?.startMinute?.let(::formatMinute) ?: "09:00") }
+    var end by rememberSaveable(block?.blockId) { mutableStateOf(block?.endMinute?.let(::formatMinute) ?: "10:00") }
     var warning by remember(block?.blockId) { mutableStateOf(false) }
     var error by remember(block?.blockId) { mutableStateOf<String?>(null) }
-    val startMin = parseMinute(start); val endMin = parseMinute(end)
+    val startMin = parseMinute(start); val endMin = parseMinute(end, allowEndOfDay = true)
     val valid = title.isNotBlank() && mask != 0 && startMin != null && endMin != null && startMin < endMin
     val overlap = valid && existing.any { other ->
         other.blockId != block?.blockId && other.daysMask and mask != 0 && startMin!! < other.endMinute && endMin!! > other.startMinute
@@ -902,7 +937,7 @@ private fun BlockDialog(
                 item { WeekdaySelector(mask, { day -> mask = mask xor (1 shl day) }, multiple = true) }
                 item { Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AlarmTimeField("Inicio", parseMinute(start) ?: 540, Modifier.weight(1f)) { start = formatMinute(it); error = null; warning = false }
-                    AlarmTimeField("Fin", parseMinute(end) ?: 600, Modifier.weight(1f)) { end = formatMinute(it); error = null; warning = false }
+                    AlarmTimeField("Fin", parseMinute(end, allowEndOfDay = true) ?: 600, Modifier.weight(1f)) { end = formatMinute(it); error = null; warning = false }
                 } }
                 item {
                     if (!valid) Text("Completa título, días y un horario válido (fin posterior al inicio; sin cruce de medianoche).", color = MaterialTheme.colorScheme.error)
@@ -1005,6 +1040,10 @@ private fun AppearanceScreen(modifier: Modifier, accentColor: Int, model: AppVie
         }
         Button(onClick = { model.setWidgetOpacity(opacityDraft.roundToInt()) },
             enabled = !busy && opacityDraft.roundToInt() != widgetOpacity) { Text("Aplicar") }
+        Spacer(Modifier.height(24.dp))
+        HorizontalDivider()
+        Spacer(Modifier.height(24.dp))
+        BackupSettingsSection(model)
     }
 }
 
@@ -1038,13 +1077,8 @@ private fun AccentPickerDialog(initial: Int, onDismiss: () -> Unit, onApply: (In
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } })
 }
 
-private fun parseMinute(input: String): Int? {
-    val parts = input.trim().split(":")
-    if (parts.size != 2) return null
-    val hour = parts[0].toIntOrNull() ?: return null; val minute = parts[1].toIntOrNull() ?: return null
-    if (hour !in 0..23 || minute !in 0..59) return null
-    return hour * 60 + minute
-}
+private fun parseMinute(input: String, allowEndOfDay: Boolean = false): Int? =
+    com.blocknize.app.domain.parseScheduleMinute(input, allowEndOfDay)
 
 private fun formatMinute(value: Int): String = "%02d:%02d".format(value / 60, value % 60)
 private fun colorHex(color: Int): String = "#${color.toUInt().toString(16).takeLast(6).uppercase()}"

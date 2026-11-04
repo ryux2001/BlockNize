@@ -7,11 +7,17 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import java.io.IOException
 
 private val Context.appearanceDataStore by preferencesDataStore(name = "appearance")
 
-class AccentStore(private val context: Context) {
+interface AppearanceStorage {
+    suspend fun snapshot(): AppearancePreferences
+    suspend fun restore(value: AppearancePreferences)
+}
+
+class AccentStore(private val context: Context) : AppearanceStorage {
     private val key = intPreferencesKey("accent_argb")
     private val widgetOpacityKey = intPreferencesKey("widget_background_opacity")
     val widgetOpacity: Flow<Int> = context.appearanceDataStore.data.map { preferences ->
@@ -30,11 +36,27 @@ class AccentStore(private val context: Context) {
         context.appearanceDataStore.edit { it[widgetOpacityKey] = percent }
     }
 
+    override suspend fun snapshot(): AppearancePreferences {
+        val preferences = context.appearanceDataStore.data.first()
+        return AppearancePreferences(preferences[key] ?: DEFAULT_ACCENT,
+            (preferences[widgetOpacityKey] ?: DEFAULT_WIDGET_OPACITY).coerceIn(0, 100))
+    }
+
+    override suspend fun restore(value: AppearancePreferences) {
+        require(value.widgetOpacity in 0..100)
+        context.appearanceDataStore.edit {
+            it[key] = value.accent or (0xFF shl 24)
+            it[widgetOpacityKey] = value.widgetOpacity
+        }
+    }
+
     companion object {
         const val DEFAULT_ACCENT: Int = 0xFFA78BFA.toInt()
         const val DEFAULT_WIDGET_OPACITY: Int = 30
     }
 }
+
+data class AppearancePreferences(val accent: Int, val widgetOpacity: Int)
 
 fun widgetBackgroundArgb(opacityPercent: Int): Int =
     ((opacityPercent.coerceIn(0, 100) * 255 + 50) / 100) shl 24

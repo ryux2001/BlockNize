@@ -97,7 +97,7 @@ internal fun WeeklyScheduleScreen(modifier: Modifier, model: AppViewModel) {
         title = { Text(detail.date.format(DateTimeFormatter.ofPattern("EEEE d MMMM", Locale.forLanguageTag("es")))) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                CalendarOccurrenceCard(detail, now)
+                CalendarOccurrenceCard(detail, now, model)
                 if (detail.date == today) Text("Se muestra la programación vigente. La actividad anterior está en Registro.",
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
             }
@@ -195,8 +195,9 @@ internal fun WeeklyScheduleGrid(
 private fun ScheduleBlock(placement: SchedulePlacement, now: Instant, modifier: Modifier, onSelect: (AgendaOccurrence) -> Unit) {
     val item = placement.occurrence
     val accent = MaterialTheme.colorScheme.primary
-    val current = !item.completed && now >= item.start && now < item.end
+    val current = item.exceptionStatus == null && !item.completed && now >= item.start && now < item.end
     val status = when {
+        item.exceptionStatus != null -> com.blocknize.app.ui.occurrence.exceptionLabel(item).orEmpty()
         item.completed -> "Completada"
         item.interrupted -> "Interrumpida"
         current -> "En curso"

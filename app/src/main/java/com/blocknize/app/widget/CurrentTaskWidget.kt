@@ -56,6 +56,8 @@ import com.blocknize.app.data.AgendaOccurrence
 import com.blocknize.app.data.AppDatabase
 import com.blocknize.app.data.TemplateRepository
 import com.blocknize.app.data.widgetBackgroundArgb
+import com.blocknize.app.domain.currentTasks
+import com.blocknize.app.domain.nextTask
 import kotlinx.coroutines.flow.first
 import java.time.Clock
 import java.time.Duration
@@ -75,9 +77,8 @@ class CurrentTaskWidget : GlanceAppWidget() {
         val now = clock.instant()
         val repository = TemplateRepository(AppDatabase.get(context), clock)
         val today = repository.getAgenda(LocalDate.now(clock))
-        val current = today.filter { !now.isBefore(it.start) && now.isBefore(it.end) }
-            .sortedWith(compareByDescending<AgendaOccurrence> { it.start }.thenBy { it.title })
-        val next = if (current.isEmpty()) today.filter { it.start.isAfter(now) }.minByOrNull { it.start } else null
+        val current = currentTasks(today, now)
+        val next = if (current.isEmpty()) nextTask(today, now) else null
         val accent = AccentStore(context).accent.first()
         val opacity = AccentStore(context).widgetOpacity.first()
 
@@ -183,12 +184,18 @@ class RefreshWidgetAction : ActionCallback {
 
 class WidgetRefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
+        com.blocknize.app.data.FullBackupRepository(applicationContext).recoverPending()
         // Upgrade previously scheduled work even when the app has not been reopened.
         ensurePeriodic(applicationContext)
         CurrentTaskWidget().updateAll(applicationContext)
         scheduleNextTransition(applicationContext)
+        android.util.Log.d("BlockNizeWidget", "Refresh completed; attempt=$runAttemptCount")
         Result.success()
-    } catch (_: Exception) {
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (error: Exception) {
+        // Do not log exception messages: provider/SQLite errors can include user data.
+        android.util.Log.w("BlockNizeWidget", "Refresh failed; type=${error.javaClass.simpleName}; attempt=$runAttemptCount")
         Result.retry()
     }
 
@@ -211,9 +218,12 @@ class WidgetRefreshWorker(context: Context, params: WorkerParameters) : Coroutin
             val clock = Clock.systemDefaultZone()
             val now = clock.instant()
             val repository = TemplateRepository(AppDatabase.get(context), clock)
-            val occurrences = repository.getAgenda(LocalDate.now(clock)) + repository.getAgenda(LocalDate.now(clock).plusDays(1))
-            val next = occurrences.flatMap { listOf(it.start, it.end) }.filter { it.isAfter(now) }.minOrNull() ?: return
+            val occurrences = (repository.getAgenda(LocalDate.now(clock)) + repository.getAgenda(LocalDate.now(clock).plusDays(1)))
+                .filter { it.exceptionStatus == null && !it.historical && !it.completed }
+            val next = occurrences.flatMap { listOf(it.start, it.end) }.filter { it.isAfter(now) }.minOrNull()
+                ?: LocalDate.now(clock).plusDays(1).atStartOfDay(clock.zone).toInstant()
             val delay = Duration.between(now, next).toMillis().coerceAtLeast(TimeUnit.MINUTES.toMillis(1))
+            android.util.Log.d("BlockNizeWidget", "Next transition=$next; delayMs=$delay")
             val request = OneTimeWorkRequestBuilder<WidgetRefreshWorker>().setInitialDelay(delay, TimeUnit.MILLISECONDS).build()
             WorkManager.getInstance(context).enqueueUniqueWork(TRANSITION_NAME, ExistingWorkPolicy.REPLACE, request)
         }

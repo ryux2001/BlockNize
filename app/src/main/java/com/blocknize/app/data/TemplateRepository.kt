@@ -7,17 +7,14 @@ import org.json.JSONObject
 import java.time.ZoneId
 import java.time.Clock
 import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.LocalTime
 import java.time.Instant
 import java.util.UUID
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.emitAll
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import com.blocknize.app.domain.civilInstant
+import com.blocknize.app.domain.civilInterval
+import com.blocknize.app.domain.SystemCivilClock
+import com.blocknize.app.domain.CivilTimeChanges
+import kotlinx.coroutines.flow.combine
 
 data class AgendaOccurrence(
     val occurrenceKey: String,
@@ -39,7 +36,13 @@ data class AgendaOccurrence(
     val interrupted: Boolean = false,
     val originalStart: Instant = start,
     val originalEnd: Instant = end,
-    val sourceTemplateName: String? = null
+    val sourceTemplateName: String? = null,
+    val exceptionId: String? = null,
+    val originalDate: LocalDate = date,
+    val exceptionStatus: String? = null,
+    val destinationDate: LocalDate? = null,
+    // Historical interval keys may change, but undo must still address the original completion.
+    val completionKey: String = occurrenceKey
 ) {
     fun progressAt(now: Instant): Float = when {
         now <= start -> 0f
@@ -49,39 +52,52 @@ data class AgendaOccurrence(
     }.coerceIn(0f, 1f)
 }
 
-class TemplateRepository(private val database: AppDatabase, private val clock: Clock = Clock.systemDefaultZone()) {
+class TemplateRepository(private val database: AppDatabase, private val clock: Clock = SystemCivilClock()) {
     private val dao = database.dao()
     fun observeTemplates(): Flow<List<TemplateRow>> = dao.observeTemplates()
     fun observeActive(): Flow<ActiveSelectionEntity?> = dao.observeActive()
     fun observeTags(): Flow<List<TagEntity>> = dao.observeTags()
     fun observeBlocks(templateId: String): Flow<List<BlockRow>> = dao.observeBlocks(templateId)
-    @OptIn(ExperimentalCoroutinesApi::class)
-    fun observeAgenda(date: LocalDate): kotlinx.coroutines.flow.Flow<List<AgendaOccurrence>> = dao.observeActive().flatMapLatest { selection ->
-        val weekly = selection?.let { dao.observeBlocks(it.templateId) } ?: flowOf(emptyList())
-        flow {
-            val eventId = selection?.let { dao.eventForRevision(it.revisionId)?.eventId }
-            emitAll(combine(weekly, dao.observeOneOffEvents(date.toEpochDay()), dao.observeCompletions(date.toEpochDay())) { blocks, oneOffs, records ->
-                buildAgenda(selection, eventId, blocks, oneOffs, records, date)
-            })
+    private fun changes() = database.invalidationTracker.createFlow(
+        "active_template_selection", "routine_templates", "task_definitions", "schedule_blocks",
+        "tags", "template_revisions", "schedule_change_events", "one_off_tasks",
+        "one_off_schedule_events", "completion_records", "occurrence_exceptions", "occurrence_exception_events"
+    ).combine(CivilTimeChanges.revisions) { tables, _ -> tables }
+
+    fun observeAgenda(date: LocalDate): Flow<List<AgendaOccurrence>> = changes().map {
+        database.withTransaction { getAgenda(date) }
+    }
+
+    fun observeCalendarAgenda(date: LocalDate): Flow<List<AgendaOccurrence>> = changes().map {
+        database.withTransaction {
+            if (date == LocalDate.now(clock)) {
+                val current = getAgenda(date)
+                // Show actionable rows from the live agenda while retaining today's interrupted history.
+                val prior = getHistoricalAgenda(date).filter { it.interrupted && current.none { live -> live.occurrenceKey == it.occurrenceKey } }
+                (current + prior).sortedBy { it.start }
+            } else getCalendarAgenda(date)
         }
     }
 
-    suspend fun getAgenda(date: LocalDate): List<AgendaOccurrence> {
+    fun observeHistory(date: LocalDate): Flow<List<AgendaOccurrence>> = changes().map {
+        database.withTransaction { getHistoricalAgenda(date) }
+    }
+
+    suspend fun getAgenda(date: LocalDate): List<AgendaOccurrence> = database.withTransaction {
         val selection = dao.active()
         val blocks = selection?.let { dao.blocks(it.templateId) }.orEmpty()
         val eventId = selection?.let { dao.eventForRevision(it.revisionId)?.eventId }
-        return buildAgenda(selection, eventId, blocks, dao.currentOneOffEvents(date.toEpochDay()), dao.completions(date.toEpochDay()), date)
+        val records = dao.completions(date.toEpochDay())
+        val base = buildAgenda(selection, eventId, blocks, dao.currentOneOffEvents(date.toEpochDay()), records, date)
+        applyCurrentExceptions(base, dao.exceptions(), records, date)
     }
 
-    suspend fun getCalendarAgenda(date: LocalDate): List<AgendaOccurrence> =
+    suspend fun getCalendarAgenda(date: LocalDate): List<AgendaOccurrence> = database.withTransaction {
         if (date.isAfter(LocalDate.now(clock))) getAgenda(date) else getHistoricalAgenda(date)
+    }
 
     fun observeWeek(startDate: LocalDate): Flow<Map<LocalDate, List<AgendaOccurrence>>> =
-        database.invalidationTracker.createFlow(
-            "active_template_selection", "routine_templates", "task_definitions", "schedule_blocks",
-            "tags", "template_revisions", "schedule_change_events", "one_off_tasks",
-            "one_off_schedule_events", "completion_records"
-        ).map {
+        changes().map {
             database.withTransaction {
                 val today = LocalDate.now(clock)
                 (0L..6L).associate { offset ->
@@ -119,8 +135,7 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
                 val startMinute = block.optInt("startMinute")
                 val endMinute = block.optInt("endMinute")
                 if (blockId.isBlank() || startMinute !in 0..1439 || endMinute !in 1..1440 || endMinute <= startMinute) continue
-                val originalStart = LocalDateTime.of(date, LocalTime.MIDNIGHT).plusMinutes(startMinute.toLong()).atZone(eventZone).toInstant()
-                val originalEnd = LocalDateTime.of(date, LocalTime.MIDNIGHT).plusMinutes(endMinute.toLong()).atZone(eventZone).toInstant()
+                val (originalStart, originalEnd) = civilInterval(date, startMinute, endMinute, eventZone)
                 val effectiveStart = maxOf(originalStart.toEpochMilli(), segmentStartMs)
                 val effectiveEnd = minOf(originalEnd.toEpochMilli(), segmentEndMs)
                 if (effectiveStart >= effectiveEnd) continue
@@ -153,8 +168,7 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
                 if (segmentStart >= segmentEnd) return@forEachIndexed
                 val eventZone = runCatching { ZoneId.of(event.zoneId) }.getOrDefault(zone)
                 val taskDate = LocalDate.ofEpochDay(event.dateEpochDay)
-                val originalStart = LocalDateTime.of(taskDate, LocalTime.MIDNIGHT).plusMinutes(event.startMinute.toLong()).atZone(eventZone).toInstant()
-                val originalEnd = LocalDateTime.of(taskDate, LocalTime.MIDNIGHT).plusMinutes(event.endMinute.toLong()).atZone(eventZone).toInstant()
+                val (originalStart, originalEnd) = civilInterval(taskDate, event.startMinute, event.endMinute, eventZone)
                 val effectiveStart = maxOf(originalStart.toEpochMilli(), segmentStart)
                 val effectiveEnd = minOf(originalEnd.toEpochMilli(), segmentEnd)
                 if (effectiveStart >= effectiveEnd) return@forEachIndexed
@@ -173,7 +187,8 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
                 )
             }
         }
-        val reconstructed = weeklyOccurrences + oneOffOccurrences
+        val reconstructed = applyHistoricalExceptions(weeklyOccurrences + oneOffOccurrences,
+            dao.exceptionEventsBefore(dayEndMs), completionRecords, date, zone)
         val unmatchedCompletions = completionRecords.filter { record ->
             reconstructed.none { occurrence -> isSameCompletion(record, occurrence) }
         }.map { record ->
@@ -197,7 +212,8 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
     }
 
     private fun isSameCompletion(record: CompletionRecordEntity, occurrence: AgendaOccurrence): Boolean =
-        record.occurrenceKey == occurrence.occurrenceKey || (record.sourceEventId == null &&
+        record.occurrenceKey == occurrence.occurrenceKey || (occurrence.completed && record.occurrenceKey == occurrence.completionKey) ||
+            (occurrence.completed && occurrence.occurrenceKey.startsWith(record.occurrenceKey + ":")) || (record.sourceEventId == null &&
             record.sourceType == occurrence.sourceType && record.sourceId == occurrence.sourceId &&
             record.dateEpochDay == occurrence.date.toEpochDay() &&
             record.titleSnapshot == occurrence.title && record.startMinuteSnapshot == occurrence.startMinute &&
@@ -235,9 +251,15 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
     }
 
     suspend fun setCompleted(occurrence: AgendaOccurrence, completed: Boolean) = database.withTransaction {
-        if (!completed) dao.deleteCompletion(occurrence.occurrenceKey)
-        else if (dao.completion(occurrence.occurrenceKey) == null) dao.upsertCompletion(CompletionRecordEntity(
-            occurrenceKey = occurrence.occurrenceKey,
+        require(occurrence.exceptionStatus == null) { "Esta ocurrencia está omitida o reprogramada." }
+        if (completed && occurrence.sourceType == "WEEKLY") {
+            require(getAgenda(occurrence.date).any { it.occurrenceKey == occurrence.occurrenceKey && it.exceptionStatus == null }) {
+                "La actividad ha cambiado. Vuelve a abrirla."
+            }
+        }
+        if (!completed) dao.deleteCompletion(occurrence.completionKey)
+        else if (dao.completion(occurrence.completionKey) == null) dao.upsertCompletion(CompletionRecordEntity(
+            occurrenceKey = occurrence.completionKey,
             sourceType = occurrence.sourceType,
             sourceId = occurrence.sourceId,
             dateEpochDay = occurrence.date.toEpochDay(),
@@ -251,6 +273,48 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
         ))
     }
 
+    suspend fun saveException(
+        occurrence: AgendaOccurrence, action: String, date: LocalDate = occurrence.date,
+        title: String = occurrence.title, description: String = occurrence.description,
+        tagName: String = occurrence.tagName.orEmpty(), startMinute: Int = occurrence.startMinute,
+        endMinute: Int = occurrence.endMinute
+    ) = database.withTransaction {
+        require(action in setOf("SKIP", "REPLACE", "RESTORE"))
+        val templateId = requireNotNull(occurrence.templateId) { "La actividad no tiene plantilla de origen." }
+        val today = LocalDate.now(clock)
+        require(!occurrence.date.isBefore(today) && !occurrence.originalDate.isBefore(today)) { "No se pueden editar ocurrencias de días pasados." }
+        val previous = dao.exceptionForOrigin(templateId, occurrence.sourceId, occurrence.originalDate.toEpochDay())
+        // Re-read the agenda inside the transaction: stale dialogs must not overwrite newer decisions.
+        val current = getAgenda(occurrence.date).firstOrNull { it.occurrenceKey == occurrence.occurrenceKey }
+        require(current != null && current == occurrence) { "La actividad ha cambiado. Vuelve a abrirla." }
+        require(!occurrence.completed && (previous == null || dao.completion("exception:${previous.id}") == null)) {
+            "Deshaz la finalización antes de modificar, omitir o restaurar esta actividad."
+        }
+        require(action != "RESTORE" || previous != null && previous.action != "RESTORE") { "No hay una excepción que restaurar." }
+        val payload = previous?.let { JSONObject(it.payloadJson) } ?: JSONObject().put("original",
+            occurrenceSnapshot(occurrence).put("templateName", dao.template(templateId)?.name.orEmpty()))
+        if (action == "REPLACE") {
+            require(title.isNotBlank()) { "El título es obligatorio." }
+            require(startMinute in 0..1439 && endMinute in 1..1440 && startMinute < endMinute) { "El inicio debe ser anterior al fin, sin cruzar medianoche." }
+            val interval = civilInterval(date, startMinute, endMinute, clock.zone)
+            require(interval.first < interval.second) { "El cambio de hora deja esta franja sin duración efectiva. Elige otro horario." }
+            require(!date.isBefore(today)) { "El destino no puede estar en una fecha pasada." }
+            val changedSchedule = date != occurrence.date || startMinute != occurrence.startMinute
+            require(!changedSchedule || !civilInstant(date, startMinute, clock.zone).isBefore(clock.instant())) {
+                "No se puede reprogramar hacia un inicio ya pasado."
+            }
+            payload.put("replacement", JSONObject().put("title", title.trim()).put("description", description.trim())
+                .put("tagName", tagName.trim()).put("startMinute", startMinute).put("endMinute", endMinute))
+        }
+        val now = clock.millis()
+        val state = OccurrenceExceptionEntity(previous?.id ?: UUID.randomUUID().toString(), templateId,
+            occurrence.sourceId, occurrence.originalDate.toEpochDay(),
+            if (action == "REPLACE") date.toEpochDay() else previous?.targetEpochDay ?: occurrence.date.toEpochDay(),
+            action, payload.toString(), previous?.zoneId ?: clock.zone.id, previous?.createdAt ?: now, now)
+        dao.upsertException(state)
+        dao.insertExceptionEvent(OccurrenceExceptionEventEntity(exceptionId = state.id, effectiveAt = now, state = state))
+    }
+
     suspend fun saveOneOff(
         id: String?, date: LocalDate, title: String, description: String, tagName: String,
         startMinute: Int, endMinute: Int
@@ -258,6 +322,8 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
         val cleanTitle = title.trim().takeIf(String::isNotEmpty) ?: error("El título es obligatorio.")
         require(!date.isBefore(LocalDate.now(clock))) { "No se pueden programar tareas temporales en una fecha pasada." }
         require(startMinute in 0..1439 && endMinute in 1..1440 && startMinute < endMinute) { "La hora de fin debe ser posterior al inicio; no se admiten bloques que crucen medianoche." }
+        val interval = civilInterval(date, startMinute, endMinute, clock.zone)
+        require(interval.first < interval.second) { "El cambio de hora deja esta franja sin duración efectiva. Elige otro horario." }
         val normalizedTag = tagName.trim()
         val tagId = if (normalizedTag.isEmpty()) null else {
             (dao.tagByName(normalizedTag) ?: TagEntity(UUID.randomUUID().toString(), normalizedTag).also { dao.upsertTag(it) }).id
@@ -414,10 +480,7 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
         tagName: String?, startMinute: Int, endMinute: Int, templateId: String?, revisionId: String?,
         eventId: String?, completed: Boolean, zone: ZoneId
     ): AgendaOccurrence {
-        val startLocal = LocalDateTime.of(date, LocalTime.MIDNIGHT).plusMinutes(startMinute.toLong())
-        val endLocal = LocalDateTime.of(date, LocalTime.MIDNIGHT).plusMinutes(endMinute.toLong())
-        val start = startLocal.atZone(zone).toInstant()
-        val end = endLocal.atZone(zone).toInstant()
+        val (start, end) = civilInterval(date, startMinute, endMinute, zone)
         return AgendaOccurrence(
             occurrenceKey = key, sourceType = type, sourceId = id, date = date, title = title,
             description = description, tagName = tagName, startMinute = startMinute, endMinute = endMinute,

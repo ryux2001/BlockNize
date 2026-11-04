@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Entity
+import androidx.room.Embedded
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.Insert
@@ -144,6 +145,37 @@ data class CompletionRecordEntity(
     val sourceEventId: String?
 )
 
+@Entity(tableName = "occurrence_exceptions", indices = [Index(value = ["templateId", "blockId", "originalEpochDay"], unique = true), Index("targetEpochDay")])
+// Deliberately no cascading relation to editable blocks: commitments and their snapshots outlive them.
+data class OccurrenceExceptionEntity(
+    @PrimaryKey val id: String,
+    val templateId: String,
+    val blockId: String,
+    val originalEpochDay: Long,
+    val targetEpochDay: Long,
+    val action: String,
+    val payloadJson: String,
+    val zoneId: String,
+    val createdAt: Long,
+    val modifiedAt: Long
+)
+
+@Entity(tableName = "occurrence_exception_events", indices = [Index("effectiveAt"), Index("exceptionId")])
+data class OccurrenceExceptionEventEntity(
+    @PrimaryKey(autoGenerate = true) val sequence: Long = 0,
+    val exceptionId: String,
+    val effectiveAt: Long,
+    @Embedded(prefix = "state_") val state: OccurrenceExceptionEntity
+)
+
+// Committed with restored Room data; removed only after DataStore has been applied.
+@Entity(tableName = "pending_restore_preferences")
+data class PendingRestorePreferencesEntity(
+    @PrimaryKey val id: Int = 1,
+    val accent: Int,
+    val widgetOpacity: Int
+)
+
 data class TemplateRow(val id: String, val name: String, val updatedAt: Long, val blockCount: Int, val active: Boolean)
 data class BlockRow(
     val blockId: String,
@@ -161,6 +193,19 @@ data class OneOffRow(val id: String, val eventId: String, val dateEpochDay: Long
 
 @Dao
 interface AppDao {
+    @Query("SELECT * FROM pending_restore_preferences WHERE id=1")
+    suspend fun pendingRestorePreferences(): PendingRestorePreferencesEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun savePendingRestorePreferences(value: PendingRestorePreferencesEntity)
+    @Query("DELETE FROM pending_restore_preferences")
+    suspend fun clearPendingRestorePreferences()
+    @Query("SELECT * FROM occurrence_exceptions") suspend fun exceptions(): List<OccurrenceExceptionEntity>
+    @Query("SELECT * FROM occurrence_exceptions WHERE templateId=:templateId AND blockId=:blockId AND originalEpochDay=:day")
+    suspend fun exceptionForOrigin(templateId: String, blockId: String, day: Long): OccurrenceExceptionEntity?
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertExceptionEvent(event: OccurrenceExceptionEventEntity)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertException(state: OccurrenceExceptionEntity)
+    @Query("SELECT * FROM occurrence_exception_events WHERE effectiveAt < :before ORDER BY effectiveAt, sequence")
+    suspend fun exceptionEventsBefore(before: Long): List<OccurrenceExceptionEventEntity>
     @Query("SELECT t.id, t.name, t.updatedAt, (SELECT COUNT(*) FROM schedule_blocks b WHERE b.templateId=t.id) AS blockCount, (SELECT templateId FROM active_template_selection WHERE singletonId=1)=t.id AS active FROM routine_templates t ORDER BY t.name COLLATE NOCASE")
     fun observeTemplates(): Flow<List<TemplateRow>>
 
@@ -223,14 +268,29 @@ interface AppDao {
 }
 
 @Database(
-    entities = [RoutineTemplateEntity::class, TagEntity::class, TaskDefinitionEntity::class, ScheduleBlockEntity::class, ActiveSelectionEntity::class, TemplateRevisionEntity::class, ScheduleChangeEventEntity::class, OneOffTaskEntity::class, OneOffScheduleEventEntity::class, CompletionRecordEntity::class],
-    version = 3,
+    entities = [RoutineTemplateEntity::class, TagEntity::class, TaskDefinitionEntity::class, ScheduleBlockEntity::class, ActiveSelectionEntity::class, TemplateRevisionEntity::class, ScheduleChangeEventEntity::class, OneOffTaskEntity::class, OneOffScheduleEventEntity::class, CompletionRecordEntity::class, OccurrenceExceptionEntity::class, OccurrenceExceptionEventEntity::class, PendingRestorePreferencesEntity::class],
+    version = 5,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): AppDao
 
     companion object {
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS pending_restore_preferences (id INTEGER NOT NULL PRIMARY KEY, accent INTEGER NOT NULL, widgetOpacity INTEGER NOT NULL)")
+            }
+        }
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS occurrence_exceptions (id TEXT NOT NULL PRIMARY KEY, templateId TEXT NOT NULL, blockId TEXT NOT NULL, originalEpochDay INTEGER NOT NULL, targetEpochDay INTEGER NOT NULL, action TEXT NOT NULL, payloadJson TEXT NOT NULL, zoneId TEXT NOT NULL, createdAt INTEGER NOT NULL, modifiedAt INTEGER NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_occurrence_exceptions_templateId_blockId_originalEpochDay ON occurrence_exceptions(templateId, blockId, originalEpochDay)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_occurrence_exceptions_targetEpochDay ON occurrence_exceptions(targetEpochDay)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS occurrence_exception_events (sequence INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, exceptionId TEXT NOT NULL, effectiveAt INTEGER NOT NULL, state_id TEXT NOT NULL, state_templateId TEXT NOT NULL, state_blockId TEXT NOT NULL, state_originalEpochDay INTEGER NOT NULL, state_targetEpochDay INTEGER NOT NULL, state_action TEXT NOT NULL, state_payloadJson TEXT NOT NULL, state_zoneId TEXT NOT NULL, state_createdAt INTEGER NOT NULL, state_modifiedAt INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_occurrence_exception_events_effectiveAt ON occurrence_exception_events(effectiveAt)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_occurrence_exception_events_exceptionId ON occurrence_exception_events(exceptionId)")
+            }
+        }
         @Volatile private var instance: AppDatabase? = null
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
@@ -258,7 +318,7 @@ abstract class AppDatabase : RoomDatabase() {
         }
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context, AppDatabase::class.java, "blocknize.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .addCallback(object : RoomDatabase.Callback() {
                     override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                         db.execSQL("CREATE TRIGGER active_selection_insert_guard BEFORE INSERT ON active_template_selection WHEN NEW.singletonId != 1 BEGIN SELECT RAISE(ABORT, 'active selection id must be 1'); END")
