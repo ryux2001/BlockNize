@@ -240,7 +240,7 @@ El resultado debe alimentar Inicio, Concentración, Calendario mensual, Calendar
 
 ## 6. Organización del código
 
-Archivos orientativos, relativos a `app/src/main/java/com/blocknize/app/`:
+Archivos orientativos, relativos a `android/app/src/main/java/com/blocknize/app/`:
 
 ```text
 ui/focus/

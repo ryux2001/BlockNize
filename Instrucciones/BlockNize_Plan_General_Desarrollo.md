@@ -34,6 +34,11 @@ Convertir BlockNize, actualmente una aplicación Android **local-first** de orga
 
 **Decisión de arquitectura:** backend modular inicialmente; no introducir microservicios ni una base de datos adicional sin una necesidad demostrada. El backend es la autoridad para cambios sincronizados y validaciones. Los clientes mantienen su estado local y usan contratos API estables.
 
+**Organización del repositorio:** monorepositorio con `android/` como raíz del proyecto
+Android e `Instrucciones/` para documentación compartida. NestJS se incorporará en
+`backend/`, al mismo nivel; `desktop/` y `web/` se añadirán cuando comience su desarrollo.
+Ver `README.md` para apertura en Android Studio, comandos y rutas de los artefactos.
+
 ## 3. Punto de partida (Android existente)
 
 Según el informe del 04/11/2026, BlockNize Android utiliza Jetpack Compose, **Room v4**, DataStore, WorkManager y Glance. Dispone de plantillas semanales, tareas temporales, completados, calendario, registro, concentración, widget y excepciones por ocurrencia con eventos históricos. No existe todavía un backend ni un sistema de cuentas.

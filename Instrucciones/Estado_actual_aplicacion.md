@@ -56,7 +56,7 @@ Se conservan el tema AMOLED, el widget con opacidad configurable y refresco nomi
 | Intercambio | JSON propio mediante `org.json` |
 | Selección de archivos | Storage Access Framework de Android |
 
-Las versiones están centralizadas en `gradle/libs.versions.toml`. La configuración Android y las dependencias del módulo se encuentran en `app/build.gradle.kts`.
+Las versiones están centralizadas en `android/gradle/libs.versions.toml`. La configuración Android y las dependencias del módulo se encuentran en `android/app/build.gradle.kts`.
 
 ## 3. Arquitectura actual
 
@@ -93,7 +93,7 @@ El widget lee el repositorio directamente: no necesita que una pantalla ni el Vi
 
 ### 3.2. Organización de archivos principales
 
-Las rutas Kotlin siguientes son relativas a `app/src/main/java/com/blocknize/app/`:
+Las rutas Kotlin siguientes son relativas a `android/app/src/main/java/com/blocknize/app/`:
 
 | Archivo | Responsabilidad |
 |---|---|
@@ -495,7 +495,7 @@ Que un archivo esté en esa carpeta no garantiza que sea válido: debe respetar 
 Durante esta actualización se ha ejecutado desde la raíz:
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin
+.\android\gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin
 ```
 
 Resultado: **BUILD SUCCESSFUL**.
@@ -503,17 +503,17 @@ Resultado: **BUILD SUCCESSFUL**.
 - La aplicación Debug compila y genera su APK.
 - Las tareas unitarias reutilizaron resultados vigentes (`UP-TO-DATE`); sus XML registran 24 pruebas correctas.
 - Las pruebas instrumentadas compilan; este comando adicional no las vuelve a ejecutar.
-- APK Debug: `app/build/outputs/apk/debug/app-debug.apk`.
-- Resultados unitarios XML: `app/build/test-results/testDebugUnitTest/`.
-- Informe HTML unitario: `app/build/reports/tests/testDebugUnitTest/index.html`.
+- APK Debug: `android/app/build/outputs/apk/debug/app-debug.apk`.
+- Resultados unitarios XML: `android/app/build/test-results/testDebugUnitTest/`.
+- Informe HTML unitario: `android/app/build/reports/tests/testDebugUnitTest/index.html`.
 
 La ejecución completa anterior, realizada el mismo 4 de noviembre de 2026 en esta sesión, utilizó:
 
 ```powershell
-.\gradlew.bat :app:connectedDebugAndroidTest :app:testDebugUnitTest :app:assembleDebug
+.\android\gradlew.bat -p android :app:connectedDebugAndroidTest :app:testDebugUnitTest :app:assembleDebug
 ```
 
-Resultado: **BUILD SUCCESSFUL**, con **45 instrumentadas correctas**, sin fallos, errores ni omitidas, en `emulator-5554`, AVD `Medium_Phone_API_36.1` (Android 16). Se ha comprobado el XML `TEST-Medium_Phone_API_36.1(AVD) - 16-_app-.xml`, situado en `app/build/outputs/androidTest-results/connected/debug/`. Informe HTML: `app/build/reports/androidTests/connected/debug/index.html`.
+Resultado: **BUILD SUCCESSFUL**, con **45 instrumentadas correctas**, sin fallos, errores ni omitidas, en `emulator-5554`, AVD `Medium_Phone_API_36.1` (Android 16). Se ha comprobado el XML `TEST-Medium_Phone_API_36.1(AVD) - 16-_app-.xml`, situado ahora en `android/app/build/outputs/androidTest-results/connected/debug/`. Informe HTML: `android/app/build/reports/androidTests/connected/debug/index.html`.
 
 Para esa batería se fijó temporalmente la orientación inicial vertical del emulador y después se restauró su rotación automática. En la consulta ADB de esta revisión aparece únicamente dicho emulador. No se ha ejecutado esta validación en un dispositivo físico ni se ha realizado un borrado manual de los datos de la aplicación.
 
@@ -625,9 +625,9 @@ La carpeta es un repositorio Git con cambios sin confirmar y archivos nuevos de 
 
 La entrega comprobada es Debug. No se ha comprobado en este trabajo una publicación en tienda, firma de producción, pipeline de integración continua ni batería completa sobre la variante Release.
 
-No se ha encontrado una configuración de GitHub Actions en `.github/`. La variante Release declara la optimización desactivada y no hay una configuración propia de firma de producción en `app/build.gradle.kts`; no se ha validado aquí el proceso de publicación.
+No se ha encontrado una configuración de GitHub Actions en `.github/`. La variante Release declara la optimización desactivada y no hay una configuración propia de firma de producción en `android/app/build.gradle.kts`; no se ha validado aquí el proceso de publicación.
 
-`Instrucciones/BlockNize_Plan_Desarrollo_v0.7.md` es la referencia funcional inicial. `Instrucciones/Plan_Concentracion_y_Excepciones.md` registra el plan y cambios de alcance; sus apartados históricos que indican excepciones pendientes no describen ya el código actual. Este informe documenta lo existente, sin actualizar esos otros documentos.
+El antiguo `Instrucciones/BlockNize_Plan_Desarrollo_v0.7.md` fue la referencia funcional inicial y se conserva en el historial Git; la hoja de ruta vigente es `Instrucciones/BlockNize_Plan_General_Desarrollo.md`. `Instrucciones/Plan_Concentracion_y_Excepciones.md` registra el plan y cambios de alcance; sus apartados históricos que indican excepciones pendientes no describen ya el código actual.
 
 ## 13. Recomendaciones de siguiente iteración
 

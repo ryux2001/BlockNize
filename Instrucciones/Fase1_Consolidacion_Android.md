@@ -109,9 +109,9 @@ WorkManager no garantiza exactitud al minuto: Doze, ahorro y fabricantes pueden 
 Comandos de referencia:
 
 ```powershell
-.\gradlew.bat :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin
-.\gradlew.bat :app:connectedDebugAndroidTest
-.\gradlew.bat :app:lintDebug :app:assembleRelease
+.\android\gradlew.bat -p android :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin
+.\android\gradlew.bat -p android :app:connectedDebugAndroidTest
+.\android\gradlew.bat -p android :app:lintDebug :app:assembleRelease
 ```
 
 Pruebas nuevas:
@@ -129,7 +129,7 @@ Pruebas nuevas:
 Ejecutado con éxito:
 
 ```powershell
-.\gradlew.bat --no-configuration-cache :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin :app:connectedDebugAndroidTest :app:lintDebug :app:assembleRelease
+.\android\gradlew.bat -p android --no-configuration-cache :app:testDebugUnitTest :app:assembleDebug :app:compileDebugAndroidTestKotlin :app:connectedDebugAndroidTest :app:lintDebug :app:assembleRelease
 ```
 
 - **31 pruebas unitarias**, sin fallos, errores ni omitidas.
@@ -139,21 +139,30 @@ Ejecutado con éxito:
 - Lint: **0 errores, 33 advertencias y 4 sugerencias**. No se han actualizado dependencias
   ni eliminado recursos solo para silenciar avisos. Persisten los avisos KSP de índices/clave
   primaria del snapshot embebido de excepciones y la opción experimental de Gradle.
-- Esquema `app/schemas/com.blocknize.app.data.AppDatabase/5.json` generado por Room.
+- Esquema `android/app/schemas/com.blocknize.app.data.AppDatabase/5.json` generado por Room.
 
 Artefactos y evidencia:
 
-- `app/build/outputs/apk/debug/app-debug.apk`
-- `app/build/outputs/apk/release/app-release-unsigned.apk`
-- `app/build/reports/tests/testDebugUnitTest/index.html`
-- `app/build/reports/androidTests/connected/debug/index.html`
-- `app/build/outputs/androidTest-results/connected/debug/TEST-Medium_Phone_API_36.1(AVD) - 16-_app-.xml`
-- `app/build/reports/lint-results-debug.html`
+- `android/app/build/outputs/apk/debug/app-debug.apk`
+- `android/app/build/outputs/apk/release/app-release-unsigned.apk`
+- `android/app/build/reports/tests/testDebugUnitTest/index.html`
+- `android/app/build/reports/androidTests/connected/debug/index.html`
+- `android/app/build/outputs/androidTest-results/connected/debug/TEST-Medium_Phone_API_36.1(AVD) - 16-_app-.xml`
+- `android/app/build/reports/lint-results-debug.html`
 
 La primera comprobación necesitó descargar Gradle y componentes SDK; no constituye una
 batería de referencia del árbol original anterior a los cambios de esta fase. Hubo intentos
 intermedios fallidos por bloqueos de caché entre daemons. Se detuvieron esos procesos y se
 ejecutó la comprobación final en una única invocación, sin caché de configuración.
+
+### Verificación posterior a la reorganización del repositorio
+
+El proyecto Gradle reside ahora en `android/`; los comandos y rutas anteriores muestran
+la ubicación actual. Se han repetido desde la raíz general la compilación Debug/Release,
+las 31 pruebas unitarias, compilación de tests instrumentados y lint, y después las 57
+pruebas instrumentadas en `emulator-5554`, con resultado **BUILD SUCCESSFUL** en ambas
+invocaciones. El traslado no modifica el contenido de las fuentes, los esquemas de Room
+ni el identificador de aplicación. Las cachés antiguas permanecen locales e ignoradas.
 
 ## Pendientes que impiden certificar H1
 

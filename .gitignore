@@ -1,20 +1,27 @@
+# IDE and local machine configuration (at any project depth)
 *.iml
-.gradle
-/local.properties
-/.idea/caches
-/.idea/
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
+.idea/
 .DS_Store
-/build
-/app/build
-/app/.cxx
-/app/.externalNativeBuild
-/.kotlin
-/captures
-.externalNativeBuild
-.cxx
 local.properties
+
+# Android / Gradle generated files, including caches left at the old root
+.gradle/
+.kotlin/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Future backend and web clients
+node_modules/
+.next/
+dist/
+
+# Secrets and signing material; sanitized examples may be committed
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
