@@ -21,8 +21,10 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.unit.dp
 import com.blocknize.app.data.AgendaOccurrence
+import com.blocknize.app.media.MediaSessionUiState
 import com.blocknize.app.ui.theme.BlockNizeTheme
 import java.time.Instant
 import java.time.LocalDate
@@ -36,7 +38,7 @@ class FocusScreenTest {
     private val task = AgendaOccurrence("focus-fixture", "WEEKLY", "task", LocalDate.parse("2026-11-03"),
         "Estudiar Kotlin", "", null, 540, 600, start, start.plusSeconds(3600), null, null, null, false)
 
-    @Test fun onlyTheBlockCounterIsDisplayedWithoutTimerControls() {
+    @Test fun taskScheduleAndCounterAreShownInsideTheRingBesideMediaPanel() {
         compose.setContent {
             BlockNizeTheme(0xFFA78BFA.toInt()) {
                 FocusScreen(Modifier.width(360.dp).height(640.dp), task, start.plusSeconds(900),
@@ -45,6 +47,12 @@ class FocusScreenTest {
         }
         compose.onNodeWithText("Estudiar Kotlin").assertIsDisplayed()
         compose.onNodeWithContentDescription("Tiempo restante del bloque: 00:45:00").assertIsDisplayed()
+        compose.onNodeWithText("Habilitar acceso").assertIsDisplayed()
+        compose.onNodeWithText("TIEMPO RESTANTE").assertDoesNotExist()
+        val ring = compose.onNodeWithTag("focus-ring").fetchSemanticsNode().boundsInRoot
+        val taskTitle = compose.onNodeWithText("Estudiar Kotlin").fetchSemanticsNode().boundsInRoot
+        assertTrue("Task title should appear inside the progress ring", taskTitle.left >= ring.left &&
+            taskTitle.top >= ring.top && taskTitle.right <= ring.right && taskTitle.bottom <= ring.bottom)
         compose.onNodeWithTag("focus-ring").assert(SemanticsMatcher.expectValue(
             SemanticsProperties.ProgressBarRangeInfo, ProgressBarRangeInfo(0.25f, 0f..1f)))
         compose.onAllNodes(hasScrollAction()).assertCountEquals(0)
@@ -61,6 +69,28 @@ class FocusScreenTest {
         }
         compose.onNodeWithText("Sin tarea en curso").assertIsDisplayed()
         compose.onNodeWithText("00:00:00").assertDoesNotExist()
+    }
+
+    @Test fun activeMediaSessionShowsTrackAndSendsPlaybackCommands() {
+        val track = MediaSessionUiState.Track(
+            title = "Mi música", artist = "Artista", playerName = "Reproductor",
+            artwork = null, isPlaying = true, canSkipPrevious = true, canSkipNext = true,
+            canTogglePlayback = true
+        )
+        var toggledFromPlaying: Boolean? = null
+        compose.setContent {
+            BlockNizeTheme(0xFFA78BFA.toInt()) {
+                FocusScreen(Modifier.width(360.dp).height(640.dp), task, start.plusSeconds(900),
+                    ready = true, canChooseTask = false, keepAwake = false, onKeepAwake = {}, onChooseTask = {},
+                    mediaState = track, onMediaToggle = { toggledFromPlaying = it })
+            }
+        }
+        compose.onNodeWithText("Mi música").assertIsDisplayed()
+        compose.onNodeWithText("Artista").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Pista anterior").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Pista siguiente").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Pausar").performClick()
+        compose.runOnIdle { assertTrue(toggledFromPlaying == true) }
     }
 
     @Test fun clockChangesReflectTheBlockEndAndNotASession() {
