@@ -12,6 +12,7 @@ import java.util.UUID
 import kotlinx.coroutines.flow.map
 import com.blocknize.app.domain.civilInstant
 import com.blocknize.app.domain.civilInterval
+import com.blocknize.app.domain.ScheduleBlock
 import com.blocknize.app.domain.SystemCivilClock
 import com.blocknize.app.domain.CivilTimeChanges
 import kotlinx.coroutines.flow.combine
@@ -257,8 +258,9 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
                 "La actividad ha cambiado. Vuelve a abrirla."
             }
         }
+        val prior = dao.completion(occurrence.completionKey)
         if (!completed) dao.deleteCompletion(occurrence.completionKey)
-        else if (dao.completion(occurrence.completionKey) == null) dao.upsertCompletion(CompletionRecordEntity(
+        else if (prior == null) dao.upsertCompletion(CompletionRecordEntity(
             occurrenceKey = occurrence.completionKey,
             sourceType = occurrence.sourceType,
             sourceId = occurrence.sourceId,
@@ -271,6 +273,8 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
             sourceRevisionId = occurrence.revisionId,
             sourceEventId = occurrence.sourceEventId
         ))
+        if ((completed && prior == null) || (!completed && prior != null)) enqueueSync("completion", occurrence.completionKey,
+            JSONObject().put("date", occurrence.date.toString()).put("occurrenceKey", occurrence.occurrenceKey).put("completed", completed))
     }
 
     suspend fun saveException(
@@ -284,6 +288,7 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
         val today = LocalDate.now(clock)
         require(!occurrence.date.isBefore(today) && !occurrence.originalDate.isBefore(today)) { "No se pueden editar ocurrencias de días pasados." }
         val previous = dao.exceptionForOrigin(templateId, occurrence.sourceId, occurrence.originalDate.toEpochDay())
+        val expectedVersion = previous?.let { dao.exceptionEventCount(it.id) } ?: 0
         // Re-read the agenda inside the transaction: stale dialogs must not overwrite newer decisions.
         val current = getAgenda(occurrence.date).firstOrNull { it.occurrenceKey == occurrence.occurrenceKey }
         require(current != null && current == occurrence) { "La actividad ha cambiado. Vuelve a abrirla." }
@@ -312,7 +317,18 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
             if (action == "REPLACE") date.toEpochDay() else previous?.targetEpochDay ?: occurrence.date.toEpochDay(),
             action, payload.toString(), previous?.zoneId ?: clock.zone.id, previous?.createdAt ?: now, now)
         dao.upsertException(state)
+        val eventId = UUID.randomUUID().toString()
         dao.insertExceptionEvent(OccurrenceExceptionEventEntity(exceptionId = state.id, effectiveAt = now, state = state))
+        enqueueSync("exception", "exception:${occurrence.templateId}:${occurrence.sourceId}:${occurrence.originalDate}", JSONObject().put("exceptionId", state.id)
+            .put("date", occurrence.date.toString()).put("occurrenceKey", occurrence.occurrenceKey)
+            .put("action", action).put("eventId", eventId)
+            .put("targetDate", if (action == "REPLACE") date.toString() else JSONObject.NULL)
+            .put("title", if (action == "REPLACE") title.trim() else JSONObject.NULL)
+            .put("description", if (action == "REPLACE") description.trim() else JSONObject.NULL)
+            .put("tagName", if (action == "REPLACE") tagName.trim().takeIf(String::isNotEmpty) ?: JSONObject.NULL else JSONObject.NULL)
+            .put("startMinute", if (action == "REPLACE") startMinute else JSONObject.NULL)
+            .put("endMinute", if (action == "REPLACE") endMinute else JSONObject.NULL)
+            .put("expectedVersion", expectedVersion))
     }
 
     suspend fun saveOneOff(
@@ -337,29 +353,38 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
             previous.startMinute != startMinute || previous.endMinute != endMinute
         dao.upsertOneOff(OneOffTaskEntity(taskId, date.toEpochDay(), cleanTitle,
             cleanDescription, tagId, startMinute, endMinute))
+        val eventId = if (changed) UUID.randomUUID().toString() else null
         if (changed) dao.insertOneOffEvent(OneOffScheduleEventEntity(
-            eventId = UUID.randomUUID().toString(), taskId = taskId, dateEpochDay = date.toEpochDay(),
+            eventId = requireNotNull(eventId), taskId = taskId, dateEpochDay = date.toEpochDay(),
             effectiveAt = clock.millis(), changeType = "UPSERT", title = cleanTitle,
             description = cleanDescription, tagName = normalizedTag.ifEmpty { null },
             startMinute = startMinute, endMinute = endMinute, zoneId = clock.zone.id
         ))
+        if (changed) enqueueSync("one-off.upsert", "one-off:$taskId", JSONObject().put("id", taskId)
+            .put("eventId", eventId)
+            .put("date", date.toString()).put("title", cleanTitle).put("description", cleanDescription)
+            .put("tagName", normalizedTag.ifEmpty { JSONObject.NULL }).put("startMinute", startMinute).put("endMinute", endMinute))
     }
 
     suspend fun deleteOneOff(id: String) = database.withTransaction {
         val task = dao.oneOff(id) ?: return@withTransaction
+        val eventId = UUID.randomUUID().toString()
         dao.insertOneOffEvent(OneOffScheduleEventEntity(
-            eventId = UUID.randomUUID().toString(), taskId = task.id, dateEpochDay = task.dateEpochDay,
+            eventId = eventId, taskId = task.id, dateEpochDay = task.dateEpochDay,
             effectiveAt = clock.millis(), changeType = "DELETE", title = task.title,
             description = task.description, tagName = task.tagId?.let { dao.tagName(it) },
             startMinute = task.startMinute, endMinute = task.endMinute, zoneId = clock.zone.id
         ))
         dao.deleteOneOff(id)
+        enqueueSync("one-off.delete", "one-off:$id", JSONObject().put("id", id).put("eventId", eventId))
     }
 
     suspend fun createTemplate(name: String) = database.withTransaction {
         val cleanName = name.trim().takeIf(String::isNotEmpty) ?: error("Escribe un nombre para la semana.")
         val now = clock.millis()
-        dao.insertTemplate(RoutineTemplateEntity(UUID.randomUUID().toString(), cleanName, now, now))
+        val id = UUID.randomUUID().toString()
+        dao.insertTemplate(RoutineTemplateEntity(id, cleanName, now, now))
+        enqueueSync("template.create", "template:$id", JSONObject().put("id", id).put("name", cleanName))
     }
 
     suspend fun exportTemplateJson(templateId: String): String {
@@ -383,6 +408,14 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
             dao.insertBlock(ScheduleBlockEntity(TemplateTransferCodec.newId(), templateId, taskId,
                 block.daysMask, block.startMinute, block.endMinute))
         }
+        val importedBlocks = JSONArray()
+        dao.blocks(templateId).forEach { block -> importedBlocks.put(JSONObject().put("blockId", block.blockId)
+            .put("taskId", block.taskId).put("title", block.title).put("description", block.description)
+            .put("tagName", block.tagName ?: JSONObject.NULL).put("daysMask", block.daysMask)
+            .put("startMinute", block.startMinute).put("endMinute", block.endMinute)) }
+        enqueueSync("template.import", "template:$templateId", JSONObject().put("id", templateId)
+            .put("name", cleanName).put("templateJson", TemplateTransferCodec.encode(cleanName, dao.blocks(templateId)))
+            .put("blocks", importedBlocks))
         templateId
     }
 
@@ -394,12 +427,14 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
         val payload = snapshot(templateId, template.name)
         val revisionId = UUID.randomUUID().toString()
         dao.insertRevision(TemplateRevisionEntity(revisionId, templateId, now, payload))
+        val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ScheduleChangeEventEntity(
-            eventId = UUID.randomUUID().toString(), effectiveAt = now,
+            eventId = eventId, effectiveAt = now,
             previousTemplateId = current?.templateId, templateId = templateId,
             revisionId = revisionId, zoneId = clock.zone.id, changeType = "ACTIVATION"
         ))
         dao.setActive(ActiveSelectionEntity(templateId = templateId, revisionId = revisionId, effectiveAt = now))
+        enqueueSync("selection.activate", "selection", JSONObject().put("templateId", templateId).put("revisionId", revisionId).put("eventId", eventId))
     }
 
     suspend fun renameTemplate(templateId: String, name: String) = database.withTransaction {
@@ -409,9 +444,11 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
         val before = snapshot(templateId, existing.name)
         val now = clock.millis()
         dao.renameTemplate(templateId, cleanName, now)
-        if (dao.active()?.templateId == templateId && before != snapshot(templateId, cleanName)) {
+        val edit = if (dao.active()?.templateId == templateId && before != snapshot(templateId, cleanName)) {
             recordActiveEdit(templateId, cleanName, now)
-        }
+        } else null
+        enqueueSync("template.rename", "template:$templateId", JSONObject().put("templateId", templateId).put("name", cleanName)
+            .put("revisionId", edit?.revisionId ?: JSONObject.NULL).put("eventId", edit?.eventId ?: JSONObject.NULL))
     }
 
     suspend fun saveBlock(
@@ -420,10 +457,11 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
     ) = database.withTransaction {
         val cleanTitle = title.trim().takeIf(String::isNotEmpty) ?: error("El título es obligatorio.")
         require(daysMask in 1..127) { "Selecciona al menos un día." }
-        require(startMinute in 0..1439 && endMinute in 1..1440 && startMinute < endMinute) { "La hora de fin debe ser posterior al inicio y el bloque no puede cruzar medianoche." }
+        val id = blockId ?: UUID.randomUUID().toString()
+        val sharedBlock = ScheduleBlock(id, cleanTitle, description.trim(), tagName.trim().ifEmpty { null }, daysMask, startMinute, endMinute)
+        require(sharedBlock.isValid) { "La hora de fin debe ser posterior al inicio y el bloque no puede cruzar medianoche." }
         val template = dao.template(templateId) ?: error("La semana ya no existe.")
         val before = snapshot(templateId, template.name)
-        val id = blockId ?: UUID.randomUUID().toString()
         val previousBlock = blockId?.let { dao.block(it) }
         require(previousBlock == null || previousBlock.templateId == templateId) { "El bloque no pertenece a esta semana." }
         val taskId = previousBlock?.taskId ?: UUID.randomUUID().toString()
@@ -436,29 +474,56 @@ class TemplateRepository(private val database: AppDatabase, private val clock: C
         val now = clock.millis()
         dao.updateTemplateTimestamp(templateId, now)
         val after = snapshot(templateId, template.name)
-        if (before != after && dao.active()?.templateId == templateId) recordActiveEdit(templateId, template.name, now)
+        val edit = if (before != after && dao.active()?.templateId == templateId) recordActiveEdit(templateId, template.name, now) else null
+        if (before != after) enqueueSync("block.upsert", "template:$templateId", JSONObject().put("templateId", templateId)
+            .put("blockId", id).put("taskId", taskId).put("title", cleanTitle).put("description", description.trim())
+            .put("tagName", normalizedTag.ifEmpty { JSONObject.NULL }).put("daysMask", daysMask)
+            .put("startMinute", startMinute).put("endMinute", endMinute)
+            .put("revisionId", edit?.revisionId ?: JSONObject.NULL).put("eventId", edit?.eventId ?: JSONObject.NULL))
     }
 
     suspend fun deleteBlock(templateId: String, blockId: String) = database.withTransaction {
         val template = dao.template(templateId) ?: error("La semana ya no existe.")
         val before = snapshot(templateId, template.name)
+        val deletedBlock = dao.block(blockId)
         dao.deleteBlock(blockId, templateId)
         val now = clock.millis()
         dao.updateTemplateTimestamp(templateId, now)
         val after = snapshot(templateId, template.name)
-        if (before != after && dao.active()?.templateId == templateId) recordActiveEdit(templateId, template.name, now)
+        val edit = if (before != after && dao.active()?.templateId == templateId) recordActiveEdit(templateId, template.name, now) else null
+        if (deletedBlock != null && before != after) enqueueSync("block.delete", "template:$templateId",
+            JSONObject().put("templateId", templateId).put("blockId", blockId)
+                .put("revisionId", edit?.revisionId ?: JSONObject.NULL).put("eventId", edit?.eventId ?: JSONObject.NULL))
     }
 
-    private suspend fun recordActiveEdit(templateId: String, name: String, now: Long) {
+    private suspend fun recordActiveEdit(templateId: String, name: String, now: Long): ActiveEditReceipt {
         val current = dao.active() ?: error("No hay una semana activa.")
         val revisionId = UUID.randomUUID().toString()
         dao.insertRevision(TemplateRevisionEntity(revisionId, templateId, now, snapshot(templateId, name)))
+        val eventId = UUID.randomUUID().toString()
         dao.insertEvent(ScheduleChangeEventEntity(
-            eventId = UUID.randomUUID().toString(), effectiveAt = now,
+            eventId = eventId, effectiveAt = now,
             previousTemplateId = templateId, templateId = templateId, revisionId = revisionId,
             zoneId = clock.zone.id, changeType = "ACTIVE_EDIT"
         ))
         dao.setActive(current.copy(revisionId = revisionId, effectiveAt = now))
+        return ActiveEditReceipt(revisionId, eventId)
+    }
+
+    private data class ActiveEditReceipt(val revisionId: String, val eventId: String)
+
+    private suspend fun enqueueSync(operationType: String, aggregateKey: String, payload: JSONObject) {
+        val state = dao.syncState() ?: return
+        if (state.mode != "CLOUD") return
+        if (!payload.has("_syncDeviceId")) payload.put("_syncDeviceId", state.deviceId)
+        if (!payload.has("clientActionAt")) payload.put("clientActionAt", java.time.Instant.ofEpochMilli(clock.millis()).toString())
+        if (!payload.has("clientTimeZone")) payload.put("clientTimeZone", clock.zone.id)
+        dao.enqueueSyncOperation(SyncOutboxEntity(
+            operationId = UUID.randomUUID().toString(), aggregateKey = aggregateKey,
+            operationType = operationType, payloadJson = payload.toString(),
+            createdAt = maxOf(clock.millis(), (dao.latestSyncOutboxTime() ?: 0L) + 1L),
+            baseVersion = dao.syncEntityVersion(aggregateKey)
+        ))
     }
 
     private suspend fun snapshot(templateId: String, name: String): String {

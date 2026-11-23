@@ -62,6 +62,7 @@ import kotlinx.coroutines.flow.first
 import java.time.Clock
 import java.time.Duration
 import java.time.LocalDate
+import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
 // ColorProvider(Int) expects a resource ID, not an ARGB value.
@@ -73,7 +74,7 @@ class CurrentTaskWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val clock = Clock.systemDefaultZone()
+        val clock = workspaceClock(context)
         val now = clock.instant()
         val repository = TemplateRepository(AppDatabase.get(context), clock)
         val today = repository.getAgenda(LocalDate.now(clock))
@@ -215,7 +216,7 @@ class WidgetRefreshWorker(context: Context, params: WorkerParameters) : Coroutin
         }
 
         private suspend fun scheduleNextTransition(context: Context) {
-            val clock = Clock.systemDefaultZone()
+            val clock = workspaceClock(context)
             val now = clock.instant()
             val repository = TemplateRepository(AppDatabase.get(context), clock)
             val occurrences = (repository.getAgenda(LocalDate.now(clock)) + repository.getAgenda(LocalDate.now(clock).plusDays(1)))
@@ -228,6 +229,14 @@ class WidgetRefreshWorker(context: Context, params: WorkerParameters) : Coroutin
             WorkManager.getInstance(context).enqueueUniqueWork(TRANSITION_NAME, ExistingWorkPolicy.REPLACE, request)
         }
     }
+}
+
+private suspend fun workspaceClock(context: Context): Clock {
+    val state = AppDatabase.get(context).dao().syncState()
+    val zone = if (state?.mode == "CLOUD") {
+        state.accountTimeZone?.let { runCatching { ZoneId.of(it) }.getOrNull() } ?: ZoneId.systemDefault()
+    } else ZoneId.systemDefault()
+    return Clock.system(zone)
 }
 
 private fun Int.toClock(): String = "%02d:%02d".format(this / 60, this % 60)
