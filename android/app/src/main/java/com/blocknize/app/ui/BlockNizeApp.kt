@@ -183,7 +183,7 @@ fun BlockNizeApp(modifier: Modifier = Modifier, model: AppViewModel) {
                     colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(containerColor = Color.Black),
                     title = {
                         Text(when {
-                            settings -> "Apariencia"
+                            settings -> "Ajustes"
                             editingTemplate != null -> templates.firstOrNull { it.id == editingTemplate }?.name ?: "Editar semana"
                             destination == AppDestination.BLOCKS -> "Semanas y bloques"
                             destination == AppDestination.CALENDAR -> "Calendario"
@@ -972,6 +972,7 @@ private fun AppearanceScreen(modifier: Modifier, accentColor: Int, model: AppVie
     val busy by model.isBusy.collectAsStateWithLifecycle()
     var opacityDraft by rememberSaveable(widgetOpacity) { mutableFloatStateOf(widgetOpacity.toFloat()) }
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp)) {
+        CloudSettingsSection(model)
         Text("Color de acento", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(6.dp)); Text("Elige una muestra o crea un color personalizado. El fondo AMOLED permanece negro.", color = Color(0xFFB8B8B8))
         Spacer(Modifier.height(24.dp)); Text("PALETA", style = MaterialTheme.typography.labelMedium, color = Color(0xFFB8B8B8))

@@ -23,6 +23,7 @@ import java.time.LocalDate
 @Composable
 fun BackupSettingsSection(model: AppViewModel) {
     val busy by model.isBusy.collectAsStateWithLifecycle()
+    val cloudState by model.cloudSettings.collectAsStateWithLifecycle()
     val summary by model.backupSummary.collectAsStateWithLifecycle()
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) {
         if (it != null) model.exportBackup(it)
@@ -39,6 +40,11 @@ fun BackupSettingsSection(model: AppViewModel) {
     Spacer(Modifier.height(12.dp))
     Button(enabled = !busy, onClick = { export.launch("BlockNize-copia-${LocalDate.now()}.json") }) {
         Text("Exportar copia completa")
+    }
+    if (cloudState.workspace.startsWith("CLOUD:")) {
+        Spacer(Modifier.height(6.dp))
+        Text("La copia exporta este espacio. Si restauras un archivo, se aplicará al espacio local y dejará intactos los datos de nube.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     OutlinedButton(enabled = !busy, onClick = { restore.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }) {
         Text("Restaurar copia completa")

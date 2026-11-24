@@ -176,6 +176,51 @@ data class PendingRestorePreferencesEntity(
     val widgetOpacity: Int
 )
 
+@Entity(tableName = "sync_state")
+data class SyncStateEntity(
+    @PrimaryKey val id: Int = 1,
+    val mode: String = "LOCAL",
+    val authIssuer: String? = null,
+    val authSubject: String? = null,
+    val remoteUserId: String? = null,
+    val accountTimeZone: String? = null,
+    val cursor: String = "0",
+    val lastSyncAt: Long? = null,
+    val lastSyncError: String? = null,
+    val deviceId: String,
+    val updatedAt: Long
+)
+
+@Entity(tableName = "sync_outbox", indices = [Index("createdAt"), Index("aggregateKey")])
+data class SyncOutboxEntity(
+    @PrimaryKey val operationId: String,
+    val aggregateKey: String,
+    val operationType: String,
+    val payloadJson: String,
+    val createdAt: Long,
+    val baseVersion: Int?,
+    val attempts: Int = 0,
+    val lastError: String? = null
+)
+
+@Entity(tableName = "sync_conflicts", indices = [Index("createdAt")])
+data class SyncConflictEntity(
+    @PrimaryKey val operationId: String,
+    val aggregateKey: String,
+    val operationType: String,
+    val localPayloadJson: String,
+    val remotePayloadJson: String?,
+    val reason: String,
+    val createdAt: Long
+)
+
+@Entity(tableName = "sync_entity_versions")
+data class SyncEntityVersionEntity(
+    @PrimaryKey val aggregateKey: String,
+    val version: Int,
+    val updatedAt: Long
+)
+
 data class TemplateRow(val id: String, val name: String, val updatedAt: Long, val blockCount: Int, val active: Boolean)
 data class BlockRow(
     val blockId: String,
@@ -200,9 +245,33 @@ interface AppDao {
     @Query("DELETE FROM pending_restore_preferences")
     suspend fun clearPendingRestorePreferences()
     @Query("SELECT * FROM occurrence_exceptions") suspend fun exceptions(): List<OccurrenceExceptionEntity>
+    @Query("DELETE FROM completion_records") suspend fun clearCompletions()
+    @Query("DELETE FROM occurrence_exception_events") suspend fun clearExceptionEvents()
+    @Query("DELETE FROM occurrence_exceptions") suspend fun clearExceptions()
+    @Query("DELETE FROM one_off_schedule_events") suspend fun clearOneOffEvents()
+    @Query("DELETE FROM one_off_tasks") suspend fun clearOneOffTasks()
+    @Query("DELETE FROM schedule_change_events") suspend fun clearScheduleEvents()
+    @Query("DELETE FROM active_template_selection") suspend fun clearActiveSelection()
+    @Query("DELETE FROM schedule_blocks") suspend fun clearScheduleBlocks()
+    @Query("DELETE FROM task_definitions") suspend fun clearTaskDefinitions()
+    @Query("DELETE FROM template_revisions") suspend fun clearTemplateRevisions()
+    @Query("DELETE FROM routine_templates") suspend fun clearTemplates()
+    @Query("DELETE FROM tags") suspend fun clearTags()
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceTemplates(rows: List<RoutineTemplateEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceTags(rows: List<TagEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceTaskDefinitions(rows: List<TaskDefinitionEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceScheduleBlocks(rows: List<ScheduleBlockEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceTemplateRevisions(rows: List<TemplateRevisionEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceScheduleEvents(rows: List<ScheduleChangeEventEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceOneOffTasks(rows: List<OneOffTaskEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceOneOffEvents(rows: List<OneOffScheduleEventEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceCompletions(rows: List<CompletionRecordEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceExceptions(rows: List<OccurrenceExceptionEntity>)
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun replaceExceptionEvents(rows: List<OccurrenceExceptionEventEntity>)
     @Query("SELECT * FROM occurrence_exceptions WHERE templateId=:templateId AND blockId=:blockId AND originalEpochDay=:day")
     suspend fun exceptionForOrigin(templateId: String, blockId: String, day: Long): OccurrenceExceptionEntity?
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertExceptionEvent(event: OccurrenceExceptionEventEntity)
+    @Query("SELECT COUNT(*) FROM occurrence_exception_events WHERE exceptionId=:exceptionId") suspend fun exceptionEventCount(exceptionId: String): Int
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertException(state: OccurrenceExceptionEntity)
     @Query("SELECT * FROM occurrence_exception_events WHERE effectiveAt < :before ORDER BY effectiveAt, sequence")
     suspend fun exceptionEventsBefore(before: Long): List<OccurrenceExceptionEventEntity>
@@ -265,17 +334,68 @@ interface AppDao {
     @Insert suspend fun insertRevision(revision: TemplateRevisionEntity)
     @Insert suspend fun insertEvent(event: ScheduleChangeEventEntity)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun setActive(selection: ActiveSelectionEntity)
+    @Query("SELECT * FROM sync_state WHERE id=1") suspend fun syncState(): SyncStateEntity?
+    @Query("SELECT * FROM sync_state WHERE id=1") fun observeSyncState(): Flow<SyncStateEntity?>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSyncState(state: SyncStateEntity)
+    @Query("SELECT version FROM sync_entity_versions WHERE aggregateKey=:aggregateKey") suspend fun syncEntityVersion(aggregateKey: String): Int?
+    @Query("DELETE FROM sync_entity_versions") suspend fun clearSyncEntityVersions()
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSyncEntityVersion(version: SyncEntityVersionEntity)
+    @Query("UPDATE sync_outbox SET baseVersion=:version WHERE aggregateKey=:aggregateKey") suspend fun advancePendingSyncVersions(aggregateKey: String, version: Int)
+    @Query("SELECT o.* FROM sync_outbox o WHERE NOT EXISTS (SELECT 1 FROM sync_conflicts c WHERE c.aggregateKey=o.aggregateKey) ORDER BY o.createdAt, o.operationId LIMIT :limit") suspend fun pendingSyncOperations(limit: Int): List<SyncOutboxEntity>
+    @Query("SELECT MAX(createdAt) FROM sync_outbox") suspend fun latestSyncOutboxTime(): Long?
+    @Query("SELECT COUNT(*) FROM sync_outbox") suspend fun syncOutboxCount(): Int
+    @Query("SELECT COUNT(*) FROM sync_conflicts") suspend fun syncConflictCount(): Int
+    @Query("SELECT COUNT(*) FROM sync_outbox") fun observeSyncOutboxCount(): Flow<Int>
+    @Query("SELECT COUNT(*) FROM sync_conflicts") fun observeSyncConflictCount(): Flow<Int>
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun enqueueSyncOperation(operation: SyncOutboxEntity)
+    @Query("UPDATE sync_outbox SET attempts=attempts+1, lastError=:error WHERE operationId=:operationId") suspend fun noteSyncAttempt(operationId: String, error: String?)
+    @Query("DELETE FROM sync_outbox WHERE operationId=:operationId") suspend fun acknowledgeSyncOperation(operationId: String)
+    @Query("SELECT * FROM sync_outbox WHERE operationId=:operationId") suspend fun syncOperation(operationId: String): SyncOutboxEntity?
+    @Query("UPDATE sync_outbox SET baseVersion=:version, attempts=0, lastError=NULL WHERE operationId=:operationId") suspend fun rebaseSyncOperation(operationId: String, version: Int)
+    @Query("DELETE FROM sync_outbox WHERE aggregateKey=:aggregateKey") suspend fun discardSyncAggregate(aggregateKey: String)
+    @Query("DELETE FROM sync_conflicts WHERE aggregateKey=:aggregateKey") suspend fun discardConflictsForAggregate(aggregateKey: String)
+    @Query("SELECT * FROM sync_conflicts WHERE operationId=:operationId") suspend fun syncConflict(operationId: String): SyncConflictEntity?
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveSyncConflict(conflict: SyncConflictEntity)
+    @Query("SELECT * FROM sync_conflicts ORDER BY createdAt, operationId") fun observeSyncConflicts(): Flow<List<SyncConflictEntity>>
+    @Query("SELECT * FROM sync_conflicts ORDER BY createdAt, operationId") suspend fun syncConflicts(): List<SyncConflictEntity>
+    @Query("DELETE FROM sync_conflicts WHERE operationId=:operationId") suspend fun resolveSyncConflict(operationId: String)
 }
 
 @Database(
-    entities = [RoutineTemplateEntity::class, TagEntity::class, TaskDefinitionEntity::class, ScheduleBlockEntity::class, ActiveSelectionEntity::class, TemplateRevisionEntity::class, ScheduleChangeEventEntity::class, OneOffTaskEntity::class, OneOffScheduleEventEntity::class, CompletionRecordEntity::class, OccurrenceExceptionEntity::class, OccurrenceExceptionEventEntity::class, PendingRestorePreferencesEntity::class],
-    version = 5,
+    entities = [RoutineTemplateEntity::class, TagEntity::class, TaskDefinitionEntity::class, ScheduleBlockEntity::class, ActiveSelectionEntity::class, TemplateRevisionEntity::class, ScheduleChangeEventEntity::class, OneOffTaskEntity::class, OneOffScheduleEventEntity::class, CompletionRecordEntity::class, OccurrenceExceptionEntity::class, OccurrenceExceptionEventEntity::class, PendingRestorePreferencesEntity::class, SyncStateEntity::class, SyncOutboxEntity::class, SyncConflictEntity::class, SyncEntityVersionEntity::class],
+    version = 9,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): AppDao
 
     companion object {
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_state ADD COLUMN accountTimeZone TEXT")
+            }
+        }
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE sync_state ADD COLUMN lastSyncAt INTEGER")
+                db.execSQL("ALTER TABLE sync_state ADD COLUMN lastSyncError TEXT")
+            }
+        }
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_entity_versions (aggregateKey TEXT NOT NULL PRIMARY KEY, version INTEGER NOT NULL, updatedAt INTEGER NOT NULL)")
+            }
+        }
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_state (id INTEGER NOT NULL PRIMARY KEY, mode TEXT NOT NULL, authIssuer TEXT, authSubject TEXT, remoteUserId TEXT, cursor TEXT NOT NULL, deviceId TEXT NOT NULL, updatedAt INTEGER NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_outbox (operationId TEXT NOT NULL PRIMARY KEY, aggregateKey TEXT NOT NULL, operationType TEXT NOT NULL, payloadJson TEXT NOT NULL, createdAt INTEGER NOT NULL, baseVersion INTEGER, attempts INTEGER NOT NULL, lastError TEXT)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_outbox_createdAt ON sync_outbox(createdAt)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_outbox_aggregateKey ON sync_outbox(aggregateKey)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS sync_conflicts (operationId TEXT NOT NULL PRIMARY KEY, aggregateKey TEXT NOT NULL, operationType TEXT NOT NULL, localPayloadJson TEXT NOT NULL, remotePayloadJson TEXT, reason TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_sync_conflicts_createdAt ON sync_conflicts(createdAt)")
+            }
+        }
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS pending_restore_preferences (id INTEGER NOT NULL PRIMARY KEY, accent INTEGER NOT NULL, widgetOpacity INTEGER NOT NULL)")
@@ -292,6 +412,7 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
         @Volatile private var instance: AppDatabase? = null
+        @Volatile private var instanceName: String? = null
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("CREATE TABLE IF NOT EXISTS one_off_tasks (id TEXT NOT NULL, dateEpochDay INTEGER NOT NULL, title TEXT NOT NULL, description TEXT NOT NULL, tagId TEXT, startMinute INTEGER NOT NULL, endMinute INTEGER NOT NULL, PRIMARY KEY(id), FOREIGN KEY(tagId) REFERENCES tags(id) ON UPDATE NO ACTION ON DELETE SET NULL)")
@@ -316,15 +437,56 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("INSERT INTO one_off_schedule_events (eventId, taskId, dateEpochDay, effectiveAt, changeType, title, description, tagName, startMinute, endMinute, zoneId) SELECT lower(hex(randomblob(16))), o.id, o.dateEpochDay, ?, 'UPSERT', o.title, o.description, t.name, o.startMinute, o.endMinute, ? FROM one_off_tasks o LEFT JOIN tags t ON t.id=o.tagId", arrayOf(System.currentTimeMillis(), java.time.ZoneId.systemDefault().id))
             }
         }
-        fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
-            instance ?: Room.databaseBuilder(context, AppDatabase::class.java, "blocknize.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+        fun activeWorkspace(context: Context): String = context.getSharedPreferences("workspace_selection", Context.MODE_PRIVATE)
+            .getString("workspace", "LOCAL") ?: "LOCAL"
+
+        fun selectLocalWorkspace(context: Context) = selectWorkspace(context, "LOCAL")
+
+        fun selectCloudWorkspace(context: Context, remoteUserId: String) {
+            require(remoteUserId.isNotBlank())
+            selectWorkspace(context, "CLOUD:$remoteUserId")
+        }
+
+        private fun selectWorkspace(context: Context, workspace: String) {
+            synchronized(this) {
+                if (activeWorkspace(context) == workspace) return
+                instance?.close()
+                instance = null
+                instanceName = null
+                check(context.getSharedPreferences("workspace_selection", Context.MODE_PRIVATE)
+                    .edit().putString("workspace", workspace).commit()) { "No se pudo cambiar de espacio de datos." }
+            }
+        }
+
+        private fun databaseName(context: Context): String {
+            val workspace = activeWorkspace(context)
+            if (workspace == "LOCAL") return "blocknize.db"
+            val userId = workspace.removePrefix("CLOUD:")
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(userId.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+            return "blocknize-cloud-$digest.db"
+        }
+
+        fun get(context: Context): AppDatabase {
+            val appContext = context.applicationContext
+            val name = databaseName(appContext)
+            return instance?.takeIf { instanceName == name } ?: synchronized(this) {
+                if (instance != null && instanceName != name) instance?.close()
+                if (instance == null || instanceName != name) {
+                    instance = Room.databaseBuilder(appContext, AppDatabase::class.java, name)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
                 .addCallback(object : RoomDatabase.Callback() {
                     override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                         db.execSQL("CREATE TRIGGER active_selection_insert_guard BEFORE INSERT ON active_template_selection WHEN NEW.singletonId != 1 BEGIN SELECT RAISE(ABORT, 'active selection id must be 1'); END")
                         db.execSQL("CREATE TRIGGER active_selection_update_guard BEFORE UPDATE ON active_template_selection WHEN NEW.singletonId != 1 BEGIN SELECT RAISE(ABORT, 'active selection id must be 1'); END")
                     }
-                }).build().also { instance = it }
+                    override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("INSERT OR IGNORE INTO sync_state (id, mode, authIssuer, authSubject, remoteUserId, cursor, deviceId, updatedAt) VALUES (1, 'LOCAL', NULL, NULL, NULL, '0', lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-' || hex(randomblob(2)) || '-' || hex(randomblob(2)) || '-' || hex(randomblob(6))), strftime('%s','now') * 1000)")
+                    }
+                }).build().also { instanceName = name }
+                }
+                requireNotNull(instance)
+            }
         }
     }
 }

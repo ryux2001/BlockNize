@@ -1,0 +1,82 @@
+@baseUrl = http://localhost:3001/api/v1
+@token = REEMPLAZA_CON_SESSION_ACCESS_TOKEN_DE_NEON_AUTH
+
+### Salud pública
+GET {{baseUrl}}/health/ready
+
+### Perfil autenticado
+GET {{baseUrl}}/me
+Authorization: Bearer {{token}}
+
+### Crear plantilla; conserva la Idempotency-Key si se reintenta
+POST {{baseUrl}}/templates
+Authorization: Bearer {{token}}
+Idempotency-Key: template-create-demo-0001
+Content-Type: application/json
+
+{"name":"Semana de prueba"}
+
+### Lista plantillas y toma el UUID y ETag para el resto de peticiones
+GET {{baseUrl}}/templates
+Authorization: Bearer {{token}}
+
+### Activar plantilla (If-Match: "0" cuando aún no exista selección)
+PUT {{baseUrl}}/active-selection
+Authorization: Bearer {{token}}
+If-Match: "0"
+Idempotency-Key: active-selection-demo-0001
+Content-Type: application/json
+
+{"templateId":"REEMPLAZA_UUID"}
+
+### Consultar agenda
+GET {{baseUrl}}/agenda?date=2026-11-12
+Authorization: Bearer {{token}}
+
+### Consultar revisiones
+GET {{baseUrl}}/templates/REEMPLAZA_UUID/revisions
+Authorization: Bearer {{token}}
+
+### Crear un bloque. Reemplaza el UUID y usa el ETag actual de la plantilla.
+POST {{baseUrl}}/templates/REEMPLAZA_UUID/blocks
+Authorization: Bearer {{token}}
+If-Match: "1"
+Idempotency-Key: block-create-demo-0001
+Content-Type: application/json
+
+{"title":"Revisar proyecto","description":"Bloque de prueba","tagName":"Trabajo","daysMask":127,"startMinute":540,"endMinute":600}
+
+### Crear una tarea temporal. Usa una fecha de hoy o futura en la zona de la cuenta.
+POST {{baseUrl}}/one-off-tasks
+Authorization: Bearer {{token}}
+Idempotency-Key: oneoff-create-demo-0001
+Content-Type: application/json
+
+{"date":"YYYY-MM-DD","title":"Llamar al equipo","description":"Prueba API","tagName":"Trabajo","startMinute":660,"endMinute":690}
+
+### Consultar una fecha y copiar occurrenceKey de una ocurrencia semanal futura
+GET {{baseUrl}}/agenda?date=YYYY-MM-DD
+Authorization: Bearer {{token}}
+
+### Completar una ocurrencia (repetir exactamente con la misma clave para probar idempotencia)
+POST {{baseUrl}}/completions
+Authorization: Bearer {{token}}
+Idempotency-Key: completion-demo-0001
+Content-Type: application/json
+
+{"date":"YYYY-MM-DD","occurrenceKey":"PEGA_OCCURRENCE_KEY","completed":true}
+
+### Omitir una ocurrencia futura; usa If-Match: "0" para crear la excepción
+POST {{baseUrl}}/occurrence-exceptions
+Authorization: Bearer {{token}}
+If-Match: "0"
+Idempotency-Key: exception-skip-demo-0001
+Content-Type: application/json
+
+{"date":"YYYY-MM-DD","occurrenceKey":"PEGA_OCCURRENCE_KEY","action":"SKIP"}
+
+### Consultar historial de una ventana de hasta 31 días
+GET {{baseUrl}}/history?from=YYYY-MM-DD&to=YYYY-MM-DD&limit=7
+Authorization: Bearer {{token}}
+
+### Neon Auth entrega el JWT al SDK; esta API no ofrece endpoints de contraseña.

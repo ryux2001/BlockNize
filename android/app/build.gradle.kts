@@ -10,6 +10,7 @@ ksp {
 
 android {
     sourceSets.getByName("androidTest").assets.directories.add("$projectDir/schemas")
+    sourceSets.getByName("main").kotlin.directories.add("$rootDir/../desktop/shared/src/commonMain/kotlin")
     namespace = "com.blocknize.app"
     compileSdk {
         version = release(36) {

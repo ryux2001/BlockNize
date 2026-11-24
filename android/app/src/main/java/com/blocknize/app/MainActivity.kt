@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         com.blocknize.app.domain.CivilTimeChanges.notifyChanged()
-        if (::appViewModel.isInitialized) appViewModel.refreshClock()
+        if (::appViewModel.isInitialized) appViewModel.onAppResumed()
         val widgetIds = AppWidgetManager.getInstance(this)
             .getAppWidgetIds(ComponentName(this, CurrentTaskWidgetReceiver::class.java))
         if (widgetIds.isNotEmpty()) {

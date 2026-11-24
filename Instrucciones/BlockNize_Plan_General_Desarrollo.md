@@ -34,11 +34,6 @@ Convertir BlockNize, actualmente una aplicación Android **local-first** de orga
 
 **Decisión de arquitectura:** backend modular inicialmente; no introducir microservicios ni una base de datos adicional sin una necesidad demostrada. El backend es la autoridad para cambios sincronizados y validaciones. Los clientes mantienen su estado local y usan contratos API estables.
 
-**Organización del repositorio:** monorepositorio con `android/` como raíz del proyecto
-Android e `Instrucciones/` para documentación compartida. NestJS se incorporará en
-`backend/`, al mismo nivel; `desktop/` y `web/` se añadirán cuando comience su desarrollo.
-Ver `README.md` para apertura en Android Studio, comandos y rutas de los artefactos.
-
 ## 3. Punto de partida (Android existente)
 
 Según el informe del 04/11/2026, BlockNize Android utiliza Jetpack Compose, **Room v4**, DataStore, WorkManager y Glance. Dispone de plantillas semanales, tareas temporales, completados, calendario, registro, concentración, widget y excepciones por ocurrencia con eventos históricos. No existe todavía un backend ni un sistema de cuentas.
@@ -82,7 +77,18 @@ La base local incluye 12 tablas, entre ellas revisiones, eventos, finalizaciones
 
 ## 6. Fase 3 — Sincronización Room ↔ backend ↔ Neon
 
+Plan detallado: [modos de uso, cuentas y sincronización Android](Fase3_Plan_Sincronizacion.md).
+
 **Objetivo:** sincronización bidireccional robusta entre dos dispositivos Android, conservando el uso offline.
+
+### Elección del modo de uso
+
+- La cuenta no es un requisito para usar BlockNize. Al usuario se le ofrecen dos modos: **Solo en este dispositivo**, con el funcionamiento actual sin registro, y **Usar con la nube**, que requiere iniciar sesión y combina almacenamiento local con sincronización automática.
+- En modo local, la aplicación conserva las funciones actuales usando Room y no exige conexión ni muestra el alta de cuenta como paso obligatorio.
+- En la versión nube, Room sigue siendo la base local de lectura y escritura. Cada cambio se guarda localmente y se sincroniza automáticamente con la cuenta para reflejar tareas, eventos e historial en otros dispositivos. Sin conexión se usa la misma base y cuenta; al recuperarla se suben los cambios pendientes y se descargan los remotos. No requiere cambiar manualmente de modo ni pulsar un botón para subirlos.
+- Una acción válida realizada sin conexión debe sincronizarse después aunque su fecha ya haya pasado; el retraso de red no debe provocar su pérdida ni rechazo por sí solo. El contrato de sync debe conservar sus eventos e historial y resolver los conflictos concurrentes reales.
+- La persona puede pasar del modo local al conectado posteriormente. Antes de subir o combinar datos, la app explica qué ocurrirá y pide confirmación; no sustituye datos locales silenciosamente.
+- La desconexión de una cuenta debe preservar los datos locales. El comportamiento de los datos remotos al desconectar o cambiar de cuenta se define explícitamente y no se resuelve borrándolos por sorpresa.
 
 **Diseño previsto:**
 
@@ -98,7 +104,7 @@ La base local incluye 12 tablas, entre ellas revisiones, eventos, finalizaciones
 
 **Entregable:** dos móviles con la misma cuenta muestran la misma agenda y el mismo historial tras sincronizar.
 
-**Criterio de salida:** pruebas superadas de edición offline, conexión intermitente, conflictos, reinstalación, reintentos duplicados y recuperación sin pérdida de datos.
+**Criterio de salida:** una instalación nueva puede usar las funciones locales sin cuenta ni red; quien elige sincronizar puede usar la misma cuenta en dos dispositivos. Deben superarse pruebas de edición offline, conexión intermitente, conflictos, transición de modo local a conectado, reinstalación, reintentos duplicados y recuperación sin pérdida de datos.
 
 ## 7. Fase 4 — Aplicación de escritorio (Kotlin Multiplatform)
 
@@ -119,6 +125,8 @@ La base local incluye 12 tablas, entre ellas revisiones, eventos, finalizaciones
 ## 8. Fase 5 — Aplicación web (Next.js)
 
 **Objetivo:** permitir utilizar BlockNize desde el navegador mediante la misma API.
+
+La secuencia de implementación y la matriz de aceptación están en el [plan detallado de la fase 5](Fase5_Plan_Web.md).
 
 **Trabajo principal:**
 
@@ -179,7 +187,7 @@ La base local incluye 12 tablas, entre ellas revisiones, eventos, finalizaciones
 | H1 | Android estable y datos completos restaurables |
 | H2 | NestJS + Neon + Neon Auth operativos con reglas y permisos |
 | H3 | Sincronización fiable entre dos Android |
-| H4 | Cliente escritorio interoperable |
+| H4 | Cliente escritorio interoperable para agenda esencial (aceptado 18/11/2026; [alcance y límites](Fase4_Plan_Escritorio.md)) |
 | H5 | Cliente web interoperable |
 | H6 | IA con tool calling seguro y compartiendo reglas de negocio |
 
