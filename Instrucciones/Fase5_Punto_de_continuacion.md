@@ -1,6 +1,6 @@
 # Fase 5 web · Punto de continuación
 
-**Última actualización:** 19/11/2026
+**Última actualización:** 24/11/2026
 
 ## Estado
 
@@ -16,44 +16,35 @@ también están implementados.
 
 ## Verificación ejecutada
 
+Actualización del 24/11/2026: se creó una cuenta sintética en el Auth URL de la rama compartida,
+se alinearon `NEON_AUTH_ISSUER`, `NEON_AUTH_JWKS_URL` y `NEON_AUTH_AUDIENCE` en `backend/.env`,
+y pasó `npm run test:integration`: login web → NestJS `/me` → logout. Se corrigió el BFF para
+obtener el JWT desde Neon en el servidor usando la cookie HttpOnly de la sesión; el JWT no llega
+al navegador. Playwright usa `http://localhost:3000`.
+
 - `npm run typecheck`: correcto.
 - `npm run lint`: correcto.
 - `npm run build`: correcto; Next 16.4.6 generó las rutas de aplicación.
 - `npm run test:unit`: 8 correctas.
 - `npm run test:e2e`: 16 correctas en Chromium, Firefox, WebKit y Chromium móvil.
+- `npm run test:integration`: 2 correctas: autenticación y recorrido H5 web.
+- Aceptación API/backend: 2 correctas; prueba automatizada de nube desktop correcta.
+- Recorrido H5 cruzado: web creó semana y bloque; desktop leyó y renombró; Android sincronizó el
+  cambio; web restauró el nombre y Android sincronizó la restauración. Cola pendiente en cero.
 - `/iniciar-sesion`: HTTP 200. Captura revisada a 1440×900 y 390×844.
 - NestJS de desarrollo: `/health/live` y `/health/ready` respondieron HTTP 200.
 
-## Bloqueo de integración actual
+## Aceptación restante
 
-El usuario compartió el Auth URL exacto de la rama. Se probó en memoria, sin guardarlo en el
-repositorio ni crear `web/.env.local`. El endpoint ya responde, pero la solicitud de login recibió
-`403 Invalid origin` para `http://127.0.0.1:3000`. La configuración `backend/.env` declara
-`CORS_ORIGINS=http://localhost:3000`; falta repetir el flujo con el web origin canónico
-`http://localhost:3000` y confirmar que ese origen está admitido en Neon Auth.
+El recorrido básico entre los tres clientes pasó, pero la fase aún no está cerrada. Siguen pendientes
+alta y persistencia de sesión tras recarga, expiración/revocación, aislamiento entre cuentas,
+conflictos y reintentos reales, agenda e historial, desconexión/reconexión, revisión manual de
+accesibilidad y ampliar la comparación de IDs/versiones. La Fase 3 conserva dependencias pendientes.
+La app desktop se lanzó; el entorno sin pantalla impidió manipular o revisar visualmente su ventana,
+por lo que su aceptación se hizo mediante la prueba automatizada de nube.
 
-No se completó todavía login → `/me` → logout. La aceptación de interoperabilidad entre web,
-Android y escritorio, aislamiento entre cuentas, reintentos reales y estados de sesión sigue abierta.
-La Fase 3 también conserva casos pendientes, tal como registra el plan de Fase 5. No marcar H5 como
-aceptada hasta completar esas pruebas.
-
-El emulador Android está disponible como `emulator-5554`; no se modificó la app Android ni se hizo
-ningún cambio en la configuración del emulador.
-
-## Continuar mañana
-
-1. Copiar `web/.env.example` a `web/.env.local`. Configurar el Auth URL exacto compartido por el
-   usuario, un cookie secret nuevo de 32 bytes, `BLOCKNIZE_API_URL=http://localhost:3001/api/v1` y
-   `BLOCKNIZE_WEB_ORIGIN=http://localhost:3000`. No derivar el Auth URL del issuer.
-2. Arrancar NestJS desde `backend/` con `npm run start:dev` y comprobar `/health/ready`.
-3. Arrancar la web desde `web/` con `npm run dev` y abrir `http://localhost:3000`. Si Neon Auth
-   devuelve de nuevo `Invalid origin`, revisar su lista de orígenes permitidos; no cambiar la
-   configuración remota sin autorización explícita.
-4. Cargar en memoria el usuario sintético de `backend/.env` y repetir `npm run test:integration`.
-   El test valida la sesión, la identidad devuelta por `/me` y el cierre de sesión. No imprimir las
-   variables ni guardar las credenciales en archivos web.
-5. Si el flujo pasa, actualizar [la aceptación](../web/ACCEPTANCE.md). Después, continuar la matriz
-   de tres clientes con datos sintéticos y limpieza documentada.
+El detalle de los casos pendientes está en [la matriz de aceptación](../web/ACCEPTANCE.md). Las
+credenciales de la cuenta sintética permanecen únicamente en `.env` locales ignorados por Git.
 
 Playwright puede guardar estado de formulario al fallar. Se eliminó el directorio de resultados de
 la prueba fallida al terminar; el test de integración desactiva las trazas y borra el campo de
@@ -65,4 +56,5 @@ contraseña tras enviar.
 - `PRODUCT.md` y `DESIGN.md`: contexto de producto y sistema visual web.
 - `web/ACCEPTANCE.md`: evidencia de pruebas y casos H5 aún pendientes.
 
-Los cambios preexistentes de Android, backend, desktop y `README.md` se conservaron sin tocar.
+Para la aceptación cruzada se agregó una prueba de integración web y una prueba condicionada de
+aceptación desktop. No se modificó el código de producción Android.

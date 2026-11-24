@@ -82,11 +82,32 @@ function jsonError(status: number, code: string, message: string) {
   return new Response(JSON.stringify({ statusCode: status, code, message }), { status, headers });
 }
 
-async function currentSession(): Promise<SessionIdentity | null> {
+async function currentSession(request: Request): Promise<SessionIdentity | null> {
   const result = await getAuth().getSession();
-  const data = result.data as { session?: { token?: string }; user?: { id?: string } } | null;
-  const token = data?.session?.token;
+  const data = result.data as { user?: { id?: string } } | null;
   const id = data?.user?.id;
+  const baseUrl = process.env.NEON_AUTH_BASE_URL?.trim();
+  const cookie = request.headers.get('cookie');
+  if (!id || !baseUrl || !cookie) return null;
+
+  const tokenResponse = await fetch(`${baseUrl.replace(/\/$/, '')}/token`, {
+    headers: {
+      Cookie: cookie,
+      Origin: process.env.BLOCKNIZE_WEB_ORIGIN ?? new URL(request.url).origin,
+    },
+    cache: 'no-store',
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!tokenResponse.ok) return null;
+  const tokenData = await tokenResponse.json() as string | {
+    access_token?: string;
+    token?: string;
+    session?: { access_token?: string };
+    data?: { token?: string };
+  };
+  const token = typeof tokenData === 'string'
+    ? tokenData
+    : tokenData.access_token ?? tokenData.token ?? tokenData.session?.access_token ?? tokenData.data?.token;
   return typeof token === 'string' && token.length > 0 && typeof id === 'string' && id.length > 0
     ? { id, token }
     : null;
@@ -202,13 +223,13 @@ export async function handleBackendRequest(request: Request, path: string[]) {
   }
 
   try {
-    const session = await currentSession();
+    const session = await currentSession(request);
     if (!session) return jsonError(401, 'UNAUTHENTICATED', 'Tu sesión terminó. Inicia sesión de nuevo.');
 
     const firstResponse = await callBackend(request, method, path, query, body, session.token);
     if (firstResponse.status !== 401) return firstResponse;
 
-    const refreshedSession = await currentSession();
+    const refreshedSession = await currentSession(request);
     if (!refreshedSession || refreshedSession.id !== session.id) {
       return jsonError(401, 'UNAUTHENTICATED', 'Tu sesión cambió o terminó. Inicia sesión de nuevo.');
     }

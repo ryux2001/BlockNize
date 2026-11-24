@@ -13,6 +13,44 @@ import java.util.UUID
 
 class DesktopCloudAcceptanceTest {
     @Test
+    fun `desktop reads and renames the schedule created by web`() {
+        assumeTrue(System.getenv("BLOCKNIZE_DESKTOP_CROSS_CLIENT_ACCEPTANCE") == "1")
+        val config = DesktopCloudConfig(
+            requireEnv("BLOCKNIZE_API_BASE_URL"),
+            requireEnv("BLOCKNIZE_AUTH_BASE_URL"),
+            requireEnv("BLOCKNIZE_AUTH_ORIGIN")
+        )
+        val email = requireEnv("BLOCKNIZE_ACCEPTANCE_EMAIL")
+        val password = requireEnv("BLOCKNIZE_ACCEPTANCE_PASSWORD")
+        val priorUserHome = System.getProperty("user.home")
+        val testHome = Files.createTempDirectory("blocknize-h5-cross-client-")
+
+        try {
+            System.setProperty("user.home", testHome.toString())
+            val desktop = DesktopCloudClient()
+            var workspace = desktop.connect(config, email, password, UUID.randomUUID().toString())
+            val template = workspace.templates.single { it.name.startsWith("H5 Cross-client ") }
+            assertTrue(template.blocks.any { it.title.startsWith("Bloque H5 ") })
+            assertEquals(template.id, workspace.activeTemplateId)
+
+            workspace = desktop.renameTemplate(
+                workspace,
+                template.id,
+                "H5 Desktop roundtrip",
+                UUID.randomUUID().toString()
+            )
+            assertEquals("H5 Desktop roundtrip", workspace.templates.single { it.id == template.id }.name)
+            assertEquals(0, workspace.pendingOperationCount)
+            desktop.signOut()
+        } finally {
+            System.setProperty("user.home", priorUserHome)
+            Files.walk(testHome).use { paths ->
+                paths.sorted(Comparator.reverseOrder()).forEach { Files.deleteIfExists(it) }
+            }
+        }
+    }
+
+    @Test
     fun `desktop login writes syncs and resolves a real concurrent edit`() {
         assumeTrue(System.getenv("BLOCKNIZE_DESKTOP_CLOUD_ACCEPTANCE") == "1")
         val apiBaseUrl = requireEnv("BLOCKNIZE_API_BASE_URL")

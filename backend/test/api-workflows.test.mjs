@@ -80,8 +80,13 @@ test('API workflows: activation, agenda, one-off lifecycle, completion, exceptio
     const blockId = blockResult.body.blocks?.[0]?.id;
     assert.ok(blockId, 'creating a block should return its stable ID');
 
+    const currentSelection = await request(tokenA, '/active-selection');
+    assert.equal(currentSelection.status, 200);
     const activated = await request(tokenA, '/active-selection', {
-      method: 'PUT', headers: { 'If-Match': '"0"', 'Idempotency-Key': key('activate') }, body: { templateId },
+      method: 'PUT', headers: {
+        'If-Match': currentSelection.headers.get('etag') ?? '"0"',
+        'Idempotency-Key': key('activate'),
+      }, body: { templateId },
     });
     assert.equal(activated.status, 200);
     assert.equal(activated.body.templateId, templateId);

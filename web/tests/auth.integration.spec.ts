@@ -32,7 +32,7 @@ test('Neon session authenticates the same account in NestJS and closes cleanly',
   await expect(page.getByRole('heading', { name: 'Tu día' })).toBeVisible();
 
   await page.goto('/cuenta');
-  await expect(page.getByText(email!, { exact: true })).toBeVisible();
+  await expect(page.getByRole('main').getByText(email!, { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Cerrar sesión' }).click();
   await page.waitForURL('**/iniciar-sesion');
 });

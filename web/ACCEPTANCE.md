@@ -18,27 +18,31 @@ Entorno de esta entrega: Windows, Node.js 22.19.0, npm 11.5.2 y Next.js 16.4.6. 
 | Pruebas unitarias Playwright | 8 correctas. |
 | E2E Playwright en Chromium, Firefox, WebKit y móvil | 16 correctas. |
 | NestJS `health/live` y `health/ready` | HTTP 200 en la rama de desarrollo. |
-| Login web → Neon → NestJS `/me` → logout | Pendiente. Con el Auth URL exacto, Neon devolvió `403 Invalid origin` para `http://127.0.0.1:3000`; repetir en `http://localhost:3000`. |
+| Login web → Neon → NestJS `/me` → logout | Correcto el 24/11/2026 en `http://localhost:3000`, con cuenta sintética de la rama de desarrollo. Playwright completó el inicio de sesión, leyó `/me` y cerró la sesión. |
+| Integración Playwright | 2 correctas: autenticación y recorrido H5 compartido. |
+| Aceptación API/backend | 2 correctas; la prueba de nube de escritorio también pasó. |
 
 ## Aceptación de integración
 
-El login se intentó primero con un URL provisional derivado del issuer y respondió HTTP 404. Después,
-el usuario compartió el Auth URL exacto y la solicitud llegó a Neon, que respondió `403 Invalid
-origin` para el origen local `http://127.0.0.1:3000`. No se guardaron credenciales en archivos del
-cliente. Para continuar, prueba desde `http://localhost:3000` y confirma que ese origen esté
-permitido en Neon Auth. Si aún falla, registra el error sin incluir campos del formulario.
+El Auth URL de desarrollo es el proporcionado para la rama Neon de aceptación. Playwright usa ahora
+`http://localhost:3000`, que está incluido en los orígenes permitidos. El BFF obtiene el JWT en el
+servidor a partir de la cookie HttpOnly de Neon y lo reenvía a NestJS; no expone el JWT al navegador.
+El flujo login → `/me` → logout pasó con una cuenta sintética. Las credenciales viven solo en los
+archivos `.env` locales ignorados por Git.
 
 | Caso | Estado | Evidencia que debe registrarse |
 |---|---|---|
-| Alta, login, `/me`, recarga y logout | Pendiente | Cuenta sintética, rama Neon y `requestId` sin guardar JWT. |
-| Renovación, expiración y revocación de sesión | Pendiente | Resultado en pestaña activa, atrás y otras pestañas. |
-| Aislamiento entre cuentas A y B | Pendiente | Cada identidad ve solo sus recursos y borradores. |
-| Semana y bloque entre web, Android y escritorio | Pendiente | IDs, versiones, selección activa y lectura tras refrescar. |
-| ETag antiguo y reintento de respuesta perdida | Pendiente | Conflicto conserva borrador y reintento no duplica evento. |
-| Temporales, completar, deshacer e historial | Pendiente | Comparación web y Android en la zona horaria de la cuenta. |
+| Alta, login, `/me`, recarga y logout | Parcial: login, `/me` y logout pasaron; alta y persistencia tras recarga pendientes. | Cuenta sintética, rama Neon y `requestId` sin guardar JWT. |
+| Renovación, expiración y revocación de sesión | Pendiente; dependencia abierta de Fase 3. | Resultado en pestaña activa, atrás y otras pestañas. |
+| Aislamiento entre cuentas A y B | Parcial: aceptación API confirmó tokens de propietarios separados y rechazo de lectura/escritura cruzada. Falta cambiar de identidad en el navegador y verificar que se limpian vistas y borradores. | `npm run test:acceptance`; falta recorrido multiusuario web. |
+| Semana y bloque entre web, Android y escritorio | Parcial: web creó semana/bloque; escritorio leyó y renombró; Android recibió el cambio al sincronizar; web restauró el nombre y Android recibió la restauración. Pendiente ampliar a IDs/versiones y más casos de refresco. | Prueba Playwright web, prueba de aceptación desktop y sincronización observada en `emulator-5554`; cola pendiente en cero. |
+| ETag antiguo y reintento de respuesta perdida | Parcial: backend rechazó ETag obsoleto con 412 y probó repetición idempotente; falta simular respuesta perdida en la web y comprobar que conserva el borrador. | `npm run test:acceptance`; falta recorrido UI con fallo de red. |
+| Temporales, completar, deshacer e historial | Parcial: aceptación API recorrió temporales, completar/deshacer, excepciones e historial. Falta comparación visual/funcional desde web y Android, zona horaria y paginación. | `npm run test:acceptance`; falta matriz cruzada de agenda. |
 | Desconexión y reconexión | Pendiente | Aviso, borrador en pestaña y estado tras reintentar. |
-| Chromium, Firefox, WebKit, móvil, teclado y zoom | Pendiente | Resultado Playwright y revisión manual de accesibilidad. |
+| Chromium, Firefox, WebKit y Chromium móvil | Correcto: 16 pruebas E2E. Teclado, zoom y revisión manual de accesibilidad pendientes. | Resultado Playwright y revisión manual. |
 
-La Fase 3 mantiene pendientes casos de expiración o revocación y operaciones encoladas cuyo día ya
-pasó. No se debe marcar H5 como aceptada ni conectar cuentas con datos personales hasta registrar
-la evidencia anterior y cerrar las dependencias de Fase 3 aplicables.
+La app de escritorio se lanzó, pero el ejecutor no ofrece una pantalla/ventana manejable para hacer
+una revisión manual de su interfaz. Su lectura y escritura en la nube se validaron con la prueba de
+aceptación automatizada. La Fase 3 mantiene pendientes casos de expiración o revocación y operaciones
+encoladas cuyo día ya pasó. H5 sigue parcialmente aceptada hasta cerrar los casos pendientes de esta
+matriz y las dependencias de Fase 3 aplicables.
